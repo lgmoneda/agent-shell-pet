@@ -1,0 +1,26 @@
+#+TITLE: Changelog
+
+All notable changes to =agent-shell-pet= are documented in this file.
+
+The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]], and this project adheres to
+[[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
+
+* Unreleased
+
+** Fixed
+- =agent-shell-pet--path-contained-p= no longer rejects pets whose
+  =spritesheet.webp= is reachable through a symlink.  The previous
+  implementation resolved both the parent directory and the spritesheet
+  through =file-truename=, which caused legitimate package-manager
+  layouts (notably =straight.el='s build directory, where individual
+  resources are symlinked back to the source repo) to fail discovery
+  silently with =No Codex-compatible pet found=.  The check is now
+  lexical via =expand-file-name=, which still rejects path-traversal
+  attempts (=..=, absolute paths, =~=) in the manifest.
+
+** Added
+- Regression test =agent-shell-pet-test-accepts-symlinked-spritesheet=
+  covering the symlinked-resource layout.
+
+* 0.1.0 — Initial release
+- Codex-compatible animated pet sprites for =agent-shell= sessions.

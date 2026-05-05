@@ -344,9 +344,17 @@ is non-nil."
     (json-read-file file)))
 
 (defun agent-shell-pet--path-contained-p (parent child)
-  "Return non-nil when CHILD resolves inside PARENT."
-  (let* ((parent (file-truename (file-name-as-directory parent)))
-         (child (file-truename child)))
+  "Return non-nil when CHILD resolves lexically inside PARENT.
+
+Uses `expand-file-name' rather than `file-truename' so that legitimate
+symlinks inside PARENT are not rejected — package managers like
+straight.el commonly stage non-Lisp resources into the build directory
+as symlinks pointing back into the source repo.  Path-traversal
+attempts in the manifest (`..', absolute paths, `~') are still caught
+because `expand-file-name' resolves them lexically without touching
+the filesystem."
+  (let* ((parent (file-name-as-directory (expand-file-name parent)))
+         (child (expand-file-name child)))
     (string-prefix-p parent child)))
 
 (defun agent-shell-pet--png-size (file)

@@ -1,0 +1,94 @@
+#+TITLE: Creating Pets With hatch-pet
+
+=agent-shell-pet= consumes the same pet package format as Codex.app. The
+recommended way to create a new compatible pet is the Codex =hatch-pet= skill.
+
+This document is a package-facing companion to the skill, not a replacement for
+it. The skill remains the source of truth for generation, visual QA, repair, and
+packaging.
+
+* When to use it
+
+Use =hatch-pet= when you want to create a new pet from:
+
+- a text concept
+- a character image
+- a screenshot
+- one or more visual references
+
+The final files should be copied or generated into one of the directories that
+=agent-shell-pet= already discovers:
+
+#+begin_example
+${CODEX_HOME:-$HOME/.codex}/pets/<pet-id>/
+#+end_example
+
+or:
+
+#+begin_example
+user-emacs-directory/agent-shell-pet/pets/<pet-id>/
+#+end_example
+
+* Required package shape
+
+#+begin_example
+<pet-id>/
+├── pet.json
+└── spritesheet.webp
+#+end_example
+
+The manifest should look like:
+
+#+begin_src json
+{
+  "id": "pet-id",
+  "displayName": "Pet Name",
+  "description": "One short sentence.",
+  "spritesheetPath": "spritesheet.webp"
+}
+#+end_src
+
+* Required atlas geometry
+
+- =1536x1872= pixels
+- =8= columns by =9= rows
+- =192x208= pixels per frame
+- transparent-capable PNG/WebP source, packaged as =spritesheet.webp=
+
+Rows:
+
+| Row | State         | Frames |
+|-----+---------------+--------|
+|   0 | idle          |      6 |
+|   1 | running-right |      8 |
+|   2 | running-left  |      8 |
+|   3 | waving        |      4 |
+|   4 | jumping       |      5 |
+|   5 | failed        |      8 |
+|   6 | waiting       |      6 |
+|   7 | running       |      6 |
+|   8 | review        |      6 |
+
+* Codex prompt
+
+When using Codex with the skill installed, a good request is:
+
+#+begin_quote
+Use the hatch-pet skill to create a Codex-compatible pet named <Name>. Install
+the final package into my agent-shell-pet user pets directory:
+~/.emacs.d/agent-shell-pet/pets/<pet-id>/.
+#+end_quote
+
+The skill should produce QA files such as a contact sheet, validation JSON, and
+preview videos. Review those before exposing the pet publicly.
+
+* Acceptance checklist
+
+Before publishing or bundling a pet:
+
+- =agent-shell-pet-list-pets= can discover it.
+- The atlas validates as =1536x1872=.
+- The contact sheet preserves identity across every row.
+- There are no white backgrounds, stray guide marks, shadows, detached effects,
+  or slot-crossing artifacts.
+- =pet.json= and =spritesheet.webp= are distributed together.

@@ -1,0 +1,18 @@
+#+TITLE: Bundled Pets
+
+Pets in this directory are discovered through
+=agent-shell-pet-bundled-pets-directory=.
+
+Each bundled pet should use the same Codex-compatible layout as installed pets:
+
+#+begin_example
+pets/<pet-id>/
+├── pet.json
+└── spritesheet.webp
+#+end_example
+
+Bundled pets should have clear redistribution rights.
+
+* Included
+
+- =clawd=: the starter bundled pet, installed from codex-pets.net.

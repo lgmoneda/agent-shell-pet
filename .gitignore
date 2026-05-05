@@ -1,0 +1,9 @@
+*.elc
+/.eldev/
+/.cask/
+/build/
+/dist/
+/frames/
+/.hatch-runs/
+/.agent-shell/
+renderers/macos/agent-shell-pet-macos-renderer

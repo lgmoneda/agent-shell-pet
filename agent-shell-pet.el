@@ -289,6 +289,12 @@ is non-nil."
 (defvar agent-shell-pet--global-runtimes (make-hash-table :test #'eq)
   "Agent-shell buffer runtimes currently contributing to the global pet.")
 
+(defvar agent-shell-pet--global-display-suppressed nil
+  "Non-nil when the user has hidden the global pet via `agent-shell-pet-hide'.
+While suppressed, frame updates and `agent-shell-pet--global-refresh' are
+skipped so the pet stays hidden across all agent-shell buffers until
+`agent-shell-pet-show' is called.")
+
 (defvar global-agent-shell-pet-mode nil
   "Non-nil when `global-agent-shell-pet-mode' is enabled.")
 
@@ -1241,6 +1247,7 @@ sources)."
 (defun agent-shell-pet--global-refresh ()
   "Refresh the global pet display from all registered runtimes."
   (when (and (eq agent-shell-pet-scope 'global)
+             (not agent-shell-pet--global-display-suppressed)
              (agent-shell-pet--runtime-live-p agent-shell-pet--global-runtime))
     (let* ((top (agent-shell-pet--global-top-runtime))
            (state (if top
@@ -1371,7 +1378,8 @@ sources)."
              (agent-shell-pet--runtime-p agent-shell-pet--global-runtime))
     (agent-shell-pet--cancel-animation agent-shell-pet--global-runtime)
     (agent-shell-pet--renderer-hide agent-shell-pet--global-runtime)
-    (setq agent-shell-pet--global-runtime nil)))
+    (setq agent-shell-pet--global-runtime nil)
+    (setq agent-shell-pet--global-display-suppressed nil)))
 
 (defun agent-shell-pet--dismiss-runtime-notification (runtime)
   "Dismiss RUNTIME's current global notification."
@@ -1483,15 +1491,38 @@ sources)."
 
 ;;;###autoload
 (defun agent-shell-pet-show ()
-  "Show the pet for the current agent-shell buffer."
+  "Show the pet.
+With `agent-shell-pet-scope' set to `global', restore a globally hidden pet
+from any buffer.  Otherwise enable `agent-shell-pet-mode' in the current
+buffer."
   (interactive)
-  (agent-shell-pet-mode 1))
+  (cond
+   ((and (eq agent-shell-pet-scope 'global)
+         agent-shell-pet--global-display-suppressed
+         (agent-shell-pet--runtime-p agent-shell-pet--global-runtime))
+    (setq agent-shell-pet--global-display-suppressed nil)
+    (agent-shell-pet--renderer-show agent-shell-pet--global-runtime)
+    (when (agent-shell-pet--runtime-live-p agent-shell-pet--global-runtime)
+      (agent-shell-pet--renderer-set-frame
+       agent-shell-pet--global-runtime
+       (agent-shell-pet--current-frame-path agent-shell-pet--global-runtime))
+      (agent-shell-pet--schedule-next-frame agent-shell-pet--global-runtime))
+    (agent-shell-pet--global-refresh))
+   (t (agent-shell-pet-mode 1))))
 
 ;;;###autoload
 (defun agent-shell-pet-hide ()
-  "Hide the pet for the current agent-shell buffer."
+  "Hide the pet.
+With `agent-shell-pet-scope' set to `global', hide the global pet from any
+buffer.  Otherwise disable `agent-shell-pet-mode' in the current buffer."
   (interactive)
-  (agent-shell-pet-mode -1))
+  (cond
+   ((and (eq agent-shell-pet-scope 'global)
+         (agent-shell-pet--runtime-p agent-shell-pet--global-runtime))
+    (setq agent-shell-pet--global-display-suppressed t)
+    (agent-shell-pet--cancel-animation agent-shell-pet--global-runtime)
+    (agent-shell-pet--renderer-hide agent-shell-pet--global-runtime))
+   (t (agent-shell-pet-mode -1))))
 
 ;;;###autoload
 (defun agent-shell-pet-reset ()
@@ -1510,6 +1541,7 @@ still be alive."
     (agent-shell-pet--cancel-animation agent-shell-pet--global-runtime)
     (agent-shell-pet--renderer-hide agent-shell-pet--global-runtime)
     (setq agent-shell-pet--global-runtime nil))
+  (setq agent-shell-pet--global-display-suppressed nil)
   (message "agent-shell-pet reset complete"))
 
 ;;;###autoload

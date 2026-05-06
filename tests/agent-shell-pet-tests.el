@@ -100,6 +100,55 @@
           (should-not (agent-shell-pet-list-pets)))
       (delete-directory root t))))
 
+(ert-deftest agent-shell-pet-test-mode-enable-is-idempotent ()
+  "`agent-shell-pet-mode' must not rebuild a live buffer-local runtime.
+Re-evaluating user config calls `global-agent-shell-pet-mode 1', which
+propagates to every agent-shell buffer; without this guarantee the
+previous renderer (e.g. macOS helper subprocess), animation timer, and
+event subscriptions are orphaned and a duplicate pet appears on screen."
+  (let* ((existing-pet (agent-shell-pet--make
+                        :id "sprout"
+                        :display-name "Sprout"
+                        :directory "/tmp"
+                        :spritesheet-path "/tmp/spritesheet.webp"))
+         (existing (agent-shell-pet--make-runtime
+                    :pet existing-pet
+                    :shell-buffer nil
+                    :renderer 'macos-native
+                    :state 'idle
+                    :status-text ""
+                    :frame-index 0))
+         (make-runtime-calls 0)
+         (renderer-show-calls 0))
+    ;; The guard short-circuits before any of these are called; the mocks
+    ;; just count invocations to prove the body did not run.  If the
+    ;; regression returns, `--make-runtime' would be hit, the mock would
+    ;; signal, and the test would fail loudly rather than rebuilding state.
+    (cl-letf (((symbol-function 'derived-mode-p) (lambda (&rest _) t))
+              ((symbol-function 'require) (lambda (&rest _) nil))
+              ((symbol-function 'agent-shell-pet--select-pet)
+               (lambda () existing-pet))
+              ((symbol-function 'agent-shell-pet--ensure-frame-cache)
+               (lambda (&rest _) nil))
+              ((symbol-function 'agent-shell-pet--make-runtime)
+               (lambda (&rest _) (cl-incf make-runtime-calls) existing))
+              ((symbol-function 'agent-shell-pet--renderer-show)
+               (lambda (&rest _) (cl-incf renderer-show-calls)))
+              ((symbol-function 'agent-shell-pet--renderer-set-frame)
+               (lambda (&rest _) nil))
+              ((symbol-function 'agent-shell-pet--schedule-next-frame)
+               (lambda (&rest _) nil))
+              ((symbol-function 'agent-shell-pet--subscribe)
+               (lambda (&rest _) nil)))
+      (with-temp-buffer
+        (setf (agent-shell-pet--runtime-shell-buffer existing) (current-buffer))
+        (setq-local agent-shell-pet--runtime existing)
+        (setq-local agent-shell-pet-mode t)
+        (agent-shell-pet-mode 1)
+        (should (eq agent-shell-pet--runtime existing))
+        (should (= make-runtime-calls 0))
+        (should (= renderer-show-calls 0))))))
+
 (ert-deftest agent-shell-pet-test-accepts-symlinked-spritesheet ()
   "Spritesheets staged as symlinks to a real file outside the pet
 directory must still load — package managers like straight.el ship

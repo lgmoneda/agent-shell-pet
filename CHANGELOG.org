@@ -21,6 +21,17 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   covering the symlinked-resource layout.
 
 ** Fixed
+- =agent-shell-pet-mode= is now idempotent on enable.  Previously,
+  re-evaluating user config (which typically calls
+  =(global-agent-shell-pet-mode 1)= again) propagated through every
+  agent-shell buffer and overwrote the buffer-local runtime,
+  orphaning the previous renderer (an extra =macos-native= helper
+  subprocess or child frame), animation timer, and event
+  subscriptions — visible as a duplicate pet on screen with no way
+  to dismiss the original.  When the buffer already has a live
+  runtime the enable branch now no-ops; use
+  =M-x agent-shell-pet-reset= to forcibly rebuild.  Covered by
+  =agent-shell-pet-test-mode-enable-is-idempotent=.
 - =agent-shell-pet--path-contained-p= no longer rejects pets whose
   =spritesheet.webp= is reachable through a symlink.  The previous
   implementation resolved both the parent directory and the spritesheet

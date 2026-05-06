@@ -1402,32 +1402,43 @@ sources)."
         (unless (derived-mode-p 'agent-shell-mode)
           (setq agent-shell-pet-mode nil)
           (user-error "agent-shell-pet-mode must be enabled in an agent-shell buffer"))
-        (require 'agent-shell)
-        (let ((pet (agent-shell-pet--select-pet)))
-          (agent-shell-pet--ensure-frame-cache pet)
-          (setq agent-shell-pet--runtime
-                (agent-shell-pet--make-runtime
-                 :pet pet
-                 :shell-buffer (current-buffer)
-                 :renderer (if (eq agent-shell-pet-scope 'global)
-                               'global
-                             agent-shell-pet-renderer)
-                 :state 'idle
-                 :status-text agent-shell-pet-idle-status-text
-                 :frame-index 0
-                 :updated-at (current-time)))
-          (if (eq agent-shell-pet-scope 'global)
-              (progn
-                (agent-shell-pet--global-ensure-display
-                 pet
-                 (current-buffer))
-                (agent-shell-pet--global-register agent-shell-pet--runtime))
-            (agent-shell-pet--renderer-show agent-shell-pet--runtime)
-            (agent-shell-pet--renderer-set-frame
-             agent-shell-pet--runtime
-             (agent-shell-pet--current-frame-path agent-shell-pet--runtime))
-            (agent-shell-pet--schedule-next-frame agent-shell-pet--runtime))
-          (agent-shell-pet--subscribe agent-shell-pet--runtime)))
+        ;; Idempotent enable.  `define-minor-mode' always re-runs the body
+        ;; on `(MODE 1)' even when MODE is already on, and
+        ;; `global-agent-shell-pet-mode' propagates this by walking every
+        ;; agent-shell buffer on every toggle.  Without this guard a user
+        ;; re-evaluating their init file would overwrite the buffer-local
+        ;; runtime, orphaning its renderer (an extra macOS helper process,
+        ;; an extra child frame), animation timer, and event subscriptions
+        ;; — visible as a second pet on screen with no way to dismiss the
+        ;; first.  Use `agent-shell-pet-reset' to forcibly rebuild.
+        (unless (and agent-shell-pet--runtime
+                     (agent-shell-pet--runtime-live-p agent-shell-pet--runtime))
+          (require 'agent-shell)
+          (let ((pet (agent-shell-pet--select-pet)))
+            (agent-shell-pet--ensure-frame-cache pet)
+            (setq agent-shell-pet--runtime
+                  (agent-shell-pet--make-runtime
+                   :pet pet
+                   :shell-buffer (current-buffer)
+                   :renderer (if (eq agent-shell-pet-scope 'global)
+                                 'global
+                               agent-shell-pet-renderer)
+                   :state 'idle
+                   :status-text agent-shell-pet-idle-status-text
+                   :frame-index 0
+                   :updated-at (current-time)))
+            (if (eq agent-shell-pet-scope 'global)
+                (progn
+                  (agent-shell-pet--global-ensure-display
+                   pet
+                   (current-buffer))
+                  (agent-shell-pet--global-register agent-shell-pet--runtime))
+              (agent-shell-pet--renderer-show agent-shell-pet--runtime)
+              (agent-shell-pet--renderer-set-frame
+               agent-shell-pet--runtime
+               (agent-shell-pet--current-frame-path agent-shell-pet--runtime))
+              (agent-shell-pet--schedule-next-frame agent-shell-pet--runtime))
+            (agent-shell-pet--subscribe agent-shell-pet--runtime))))
     (when agent-shell-pet--runtime
       (when (eq agent-shell-pet-scope 'global)
         (agent-shell-pet--global-unregister agent-shell-pet--runtime))

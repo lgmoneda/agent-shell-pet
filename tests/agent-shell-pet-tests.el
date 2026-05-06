@@ -494,6 +494,83 @@ non-Lisp resources this way."
     (should-not (agent-shell-pet--runtime-live-p runtime))
     (should-not (agent-shell-pet--tick runtime))))
 
+(ert-deftest agent-shell-pet-test-hide-from-any-buffer-suppresses-global ()
+  "`agent-shell-pet-hide' must hide the global pet regardless of caller buffer."
+  (let* ((agent-shell-pet-scope 'global)
+         (agent-shell-pet--global-runtimes (make-hash-table :test #'eq))
+         (agent-shell-pet--global-display-suppressed nil)
+         (pet (agent-shell-pet--make :id "sprout"))
+         (originating-buffer (generate-new-buffer "Originating"))
+         (other-buffer (generate-new-buffer "Other"))
+         (originating-runtime (agent-shell-pet--make-runtime
+                               :pet pet
+                               :shell-buffer originating-buffer
+                               :renderer 'global
+                               :state 'idle
+                               :frame-index 0
+                               :updated-at (current-time)))
+         (other-runtime (agent-shell-pet--make-runtime
+                         :pet pet
+                         :shell-buffer other-buffer
+                         :renderer 'global
+                         :state 'idle
+                         :frame-index 0
+                         :updated-at (current-time)))
+         (global-runtime (agent-shell-pet--make-runtime
+                          :pet pet
+                          :shell-buffer originating-buffer
+                          :renderer 'child-frame
+                          :state 'idle
+                          :frame-index 0
+                          :global-display-p t
+                          :updated-at (current-time)))
+         (agent-shell-pet--global-runtime global-runtime)
+         hide-calls cancel-calls)
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell-pet--renderer-hide)
+                   (lambda (rt) (push rt hide-calls)))
+                  ((symbol-function 'agent-shell-pet--cancel-animation)
+                   (lambda (rt) (push rt cancel-calls))))
+          (puthash originating-buffer originating-runtime
+                   agent-shell-pet--global-runtimes)
+          (puthash other-buffer other-runtime
+                   agent-shell-pet--global-runtimes)
+          (with-current-buffer other-buffer
+            (agent-shell-pet-hide))
+          (should agent-shell-pet--global-display-suppressed)
+          (should (memq global-runtime hide-calls))
+          (should (memq global-runtime cancel-calls))
+          ;; Both per-buffer runtimes remain registered: hide must not
+          ;; depend on tearing them down.
+          (should (= (hash-table-count agent-shell-pet--global-runtimes) 2)))
+      (when (buffer-live-p originating-buffer) (kill-buffer originating-buffer))
+      (when (buffer-live-p other-buffer) (kill-buffer other-buffer)))))
+
+(ert-deftest agent-shell-pet-test-global-refresh-skipped-while-suppressed ()
+  "Frame updates from registered runtimes must not re-show a hidden pet."
+  (let* ((agent-shell-pet-scope 'global)
+         (agent-shell-pet--global-display-suppressed t)
+         (pet (agent-shell-pet--make :id "sprout"))
+         (buffer (generate-new-buffer "Refresh"))
+         (global-runtime (agent-shell-pet--make-runtime
+                          :pet pet
+                          :shell-buffer buffer
+                          :renderer 'child-frame
+                          :state 'idle
+                          :frame-index 0
+                          :global-display-p t
+                          :updated-at (current-time)))
+         (agent-shell-pet--global-runtime global-runtime)
+         set-frame-calls)
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell-pet--renderer-set-frame)
+                   (lambda (&rest args) (push args set-frame-calls)))
+                  ((symbol-function 'agent-shell-pet--runtime-live-p)
+                   (lambda (_rt) t)))
+          (agent-shell-pet--global-refresh)
+          (should-not set-frame-calls))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
 (provide 'agent-shell-pet-tests)
 
 ;;; agent-shell-pet-tests.el ends here

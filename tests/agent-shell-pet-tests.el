@@ -100,6 +100,36 @@
           (should-not (agent-shell-pet-list-pets)))
       (delete-directory root t))))
 
+(ert-deftest agent-shell-pet-test-accepts-symlinked-spritesheet ()
+  "Spritesheets staged as symlinks to a real file outside the pet
+directory must still load — package managers like straight.el ship
+non-Lisp resources this way."
+  (skip-unless (executable-find "ln"))
+  (let* ((root (make-temp-file "agent-shell-pet" t))
+         (agent-shell-pet-codex-home root)
+         (agent-shell-pet-user-pets-directory
+          (expand-file-name "user-pets/" root))
+         (agent-shell-pet-bundled-pets-directory
+          (expand-file-name "bundled-pets/" root))
+         (pet-dir (expand-file-name "pets/sprout/" root))
+         (real-atlas (expand-file-name "real-store/spritesheet.webp" root))
+         (linked-atlas (expand-file-name "spritesheet.webp" pet-dir)))
+    (unwind-protect
+        (progn
+          (make-directory pet-dir t)
+          (make-directory (file-name-directory real-atlas) t)
+          (agent-shell-pet-tests--write-webp-atlas real-atlas)
+          (make-symbolic-link real-atlas linked-atlas)
+          (with-temp-file (expand-file-name "pet.json" pet-dir)
+            (insert "{\n"
+                    "  \"id\": \"sprout\",\n"
+                    "  \"spritesheetPath\": \"spritesheet.webp\"\n"
+                    "}\n"))
+          (let ((pets (agent-shell-pet-list-pets)))
+            (should (= (length pets) 1))
+            (should (equal (agent-shell-pet-id (car pets)) "sprout"))))
+      (delete-directory root t))))
+
 (ert-deftest agent-shell-pet-test-discovers-user-pets-without-codex ()
   (let* ((root (make-temp-file "agent-shell-pet" t))
          (agent-shell-pet-include-codex-pets nil)

@@ -1,0 +1,35 @@
+#+TITLE: Changelog
+
+All notable changes to =agent-shell-pet= are documented in this file.
+
+The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]], and this project adheres to
+[[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
+
+* Unreleased
+
+** Added
+- macOS native renderer auto-build prompt.  When
+  =agent-shell-pet-renderer= is =macos-native= and the helper binary
+  has not been compiled yet, the package now offers to run
+  =make -C renderers/macos= from inside Emacs via =y-or-n-p= instead of
+  failing with a copy-pasteable shell command.  Build output is
+  captured in =*agent-shell-pet build*= and the buffer is displayed
+  automatically on failure.  Triggers only on macOS, only when the
+  Makefile and =make= executable are reachable, and only when the
+  helper is actually missing — otherwise the path is unchanged.
+- Regression test =agent-shell-pet-test-accepts-symlinked-spritesheet=
+  covering the symlinked-resource layout.
+
+** Fixed
+- =agent-shell-pet--path-contained-p= no longer rejects pets whose
+  =spritesheet.webp= is reachable through a symlink.  The previous
+  implementation resolved both the parent directory and the spritesheet
+  through =file-truename=, which caused legitimate package-manager
+  layouts (notably =straight.el='s build directory, where individual
+  resources are symlinked back to the source repo) to fail discovery
+  silently with =No Codex-compatible pet found=.  The check is now
+  lexical via =expand-file-name=, which still rejects path-traversal
+  attempts (=..=, absolute paths, =~=) in the manifest.
+
+* 0.1.0 — Initial release
+- Codex-compatible animated pet sprites for =agent-shell= sessions.

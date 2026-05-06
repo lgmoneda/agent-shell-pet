@@ -344,9 +344,17 @@ is non-nil."
     (json-read-file file)))
 
 (defun agent-shell-pet--path-contained-p (parent child)
-  "Return non-nil when CHILD resolves inside PARENT."
-  (let* ((parent (file-truename (file-name-as-directory parent)))
-         (child (file-truename child)))
+  "Return non-nil when CHILD resolves lexically inside PARENT.
+
+Uses `expand-file-name' rather than `file-truename' so that legitimate
+symlinks inside PARENT are not rejected — package managers like
+straight.el commonly stage non-Lisp resources into the build directory
+as symlinks pointing back into the source repo.  Path-traversal
+attempts in the manifest (`..', absolute paths, `~') are still caught
+because `expand-file-name' resolves them lexically without touching
+the filesystem."
+  (let* ((parent (file-name-as-directory (expand-file-name parent)))
+         (child (expand-file-name child)))
     (string-prefix-p parent child)))
 
 (defun agent-shell-pet--png-size (file)
@@ -813,13 +821,71 @@ installs to Codex; otherwise use `agent-shell-pet-install-target'."
     (and (processp process)
          (process-live-p process))))
 
+(defun agent-shell-pet--macos-helper-build-dir ()
+  "Return the directory containing the macOS helper Makefile."
+  (file-name-directory agent-shell-pet-macos-helper-path))
+
+(defun agent-shell-pet--macos-helper-buildable-p ()
+  "Return non-nil when the macOS helper can be built in-place.
+True when the build directory and its Makefile exist on disk and a
+`make' executable is available on PATH."
+  (let ((build-dir (agent-shell-pet--macos-helper-build-dir)))
+    (and (file-directory-p build-dir)
+         (file-readable-p (expand-file-name "Makefile" build-dir))
+         (executable-find "make"))))
+
+(defun agent-shell-pet--macos-build-helper-sync ()
+  "Build the macOS helper synchronously.
+Build output is collected in `*agent-shell-pet build*'; the buffer is
+displayed on failure.  Returns non-nil when the helper executable
+exists after the build."
+  (let* ((build-dir (agent-shell-pet--macos-helper-build-dir))
+         (buffer (get-buffer-create "*agent-shell-pet build*"))
+         exit)
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "$ make -C %s\n\n" build-dir))))
+    (message "agent-shell-pet: building macOS helper in %s ..."
+             (abbreviate-file-name build-dir))
+    (let ((default-directory build-dir))
+      (setq exit (call-process "make" nil buffer t)))
+    (cond
+     ((and (eq exit 0)
+           (file-executable-p agent-shell-pet-macos-helper-path))
+      (message "agent-shell-pet: macOS helper built at %s"
+               (abbreviate-file-name agent-shell-pet-macos-helper-path))
+      t)
+     (t
+      (display-buffer buffer)
+      (message "agent-shell-pet: build failed (exit %S); see *agent-shell-pet build*"
+               exit)
+      nil))))
+
+(defun agent-shell-pet--macos-maybe-prompt-build ()
+  "Offer to build the macOS helper when it is missing.
+Returns non-nil once the helper is executable.  No-op when not running
+on macOS, when the helper already exists, or when the build directory
+is not present (e.g. an installation that stripped the renderer
+sources)."
+  (cond
+   ((file-executable-p agent-shell-pet-macos-helper-path) t)
+   ((not (eq system-type 'darwin)) nil)
+   ((not (agent-shell-pet--macos-helper-buildable-p)) nil)
+   ((y-or-n-p
+     (format "agent-shell-pet: macOS helper is not built. Build it now (make -C %s)? "
+             (abbreviate-file-name (agent-shell-pet--macos-helper-build-dir))))
+    (agent-shell-pet--macos-build-helper-sync))
+   (t nil)))
+
 (defun agent-shell-pet--macos-ensure-process (runtime)
   "Ensure RUNTIME has a live macOS renderer helper."
   (unless (eq system-type 'darwin)
     (user-error "The macOS native renderer only works on macOS"))
   (unless (file-executable-p agent-shell-pet-macos-helper-path)
-    (user-error "macOS pet helper is not executable. Build it with: make -C %s"
-                (file-name-directory agent-shell-pet-macos-helper-path)))
+    (unless (agent-shell-pet--macos-maybe-prompt-build)
+      (user-error "macOS pet helper is not executable. Build it with: make -C %s"
+                  (agent-shell-pet--macos-helper-build-dir))))
   (unless (agent-shell-pet--macos-helper-live-p runtime)
     (let* ((shell-buffer (agent-shell-pet--runtime-shell-buffer runtime))
            (process-name (if (buffer-live-p shell-buffer)

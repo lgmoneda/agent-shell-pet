@@ -37,6 +37,27 @@ make -C renderers/macos
 (setq agent-shell-pet-renderer 'macos-native)
 #+end_src
 
+* Doom Emacs
+
+In =$DOOMDIR/packages.el=:
+
+#+begin_src emacs-lisp
+(package! agent-shell-pet
+  :recipe (:host github :repo "lgmoneda/agent-shell-pet"
+           :files ("*.el" "pets" "renderers")))
+#+end_src
+
+In =$DOOMDIR/config.el=:
+
+#+begin_src emacs-lisp
+(use-package! agent-shell-pet
+  :after agent-shell
+  :config
+  (global-agent-shell-pet-mode 1))
+#+end_src
+
+Then run =doom sync= and restart Emacs.
+
 * Recommended Config
 
 #+begin_src emacs-lisp

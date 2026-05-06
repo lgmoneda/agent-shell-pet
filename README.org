@@ -1,22 +1,25 @@
 #+TITLE: agent-shell-pet
 
 =agent-shell-pet= adds Codex-compatible animated pets to Emacs
-=agent-shell= sessions.
+=agent-shell= sessions. The Codex App isn't required.
 
-It is a separate package from =agent-shell=. It listens to the public
+It listens to the public
 =agent-shell= event API, so it works with Codex, Claude, and other ACP-backed
 agents.
 
+#+caption: Clawd floating beside an agent-shell activity card.
+[[file:docs/screenshots/macos-native-clawd.png]]
+
 * Features
 
-- One Codex-like global pet by default.
+- One global pet by default, notifying about all agent-shell buffers.
 - Stacked activity cards for different =agent-shell= sessions.
 - Visiting a session dismisses only that session's current card.
 - Optional one-pet-per-buffer mode.
 - Portable Emacs child-frame renderer.
 - macOS native renderer that floats above other app windows.
-- Uses the same =pet.json= and =spritesheet.webp= format as Codex.app.
-- Ships with the =clawd= pet from [[https://codex-pets.net/#/pets/clawd][codex-pets.net]].
+- Uses the same =pet.json= and =spritesheet.webp= format as Codex.app, so you can use any pet from [[https://codex-pets.net/#/pets/clawd][codex-pets.net]].
+- Includes the /hatch-pet skill so you can create your custom pets easily.
 
 * Quick Start
 
@@ -162,7 +165,5 @@ Byte-compile:
 emacs --batch -L . -f batch-byte-compile agent-shell-pet.el
 #+end_src
 
-* Screenshot
 
-#+caption: Clawd floating beside an agent-shell activity card.
-[[file:docs/screenshots/macos-native-clawd.png]]
+

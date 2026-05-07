@@ -11,14 +11,23 @@ let cardPetOverlap: CGFloat = 20
 let petCardInset: CGFloat = 18
 
 struct NotificationCard: Decodable {
+    let sessionId: String?
     let title: String?
     let body: String?
     let cardStatus: String?
+
+    init(sessionId: String? = nil, title: String? = nil, body: String? = nil, cardStatus: String? = nil) {
+        self.sessionId = sessionId
+        self.title = title
+        self.body = body
+        self.cardStatus = cardStatus
+    }
 }
 
 struct Command: Decodable {
     let type: String
     let path: String?
+    let sessionId: String?
     let text: String?
     let title: String?
     let body: String?
@@ -36,6 +45,7 @@ final class PetView: NSView {
     var image: NSImage?
     var title: String?
     var body: String?
+    var sessionId: String?
     var cardStatus = "thinking"
     var cardTheme = "dark"
     var showCard = false
@@ -62,7 +72,7 @@ final class PetView: NSView {
 
     var visibleCards: [NotificationCard] {
         if cards.isEmpty {
-            return showCard ? [NotificationCard(title: title, body: body, cardStatus: cardStatus)] : []
+            return showCard ? [NotificationCard(sessionId: sessionId, title: title, body: body, cardStatus: cardStatus)] : []
         }
         return cards
     }
@@ -117,6 +127,20 @@ final class PetView: NSView {
             }
         }
         return false
+    }
+
+    func cardSessionId(at point: NSPoint) -> String? {
+        guard hasVisibleCards && collapseProgress < 1 else { return nil }
+        let spriteHeight = cellHeight * scale
+        let cardY = max(0, spriteHeight - cardPetOverlap)
+        for (index, card) in visibleCards.enumerated() {
+            let y = cardY + CGFloat(index) * (cardHeight + cardGap)
+            let rect = NSRect(x: 0, y: y, width: min(cardWidth, bounds.width), height: cardHeight)
+            if rect.contains(point) {
+                return card.sessionId
+            }
+        }
+        return nil
     }
 
     func setCollapsed(_ value: Bool, animated: Bool = true) {
@@ -392,8 +416,16 @@ final class Renderer {
             self?.userMovedWindow = true
         }
         window.onUserClick = { [weak self] point in
-            guard let view = self?.view else { return false }
-            return view.toggleCollapseIfHit(at: view.convert(point, from: nil))
+            guard let self else { return false }
+            let localPoint = self.view.convert(point, from: nil)
+            if self.view.toggleCollapseIfHit(at: localPoint) {
+                return true
+            }
+            if let sessionId = self.view.cardSessionId(at: localPoint) {
+                self.emitClick(sessionId: sessionId)
+                return true
+            }
+            return false
         }
         view.onCollapseChanged = { [weak self] in
             self?.resizeAndPosition(preserveSpriteAnchor: true)
@@ -410,6 +442,7 @@ final class Renderer {
             if let path = command.path {
                 view.image = NSImage(contentsOfFile: path)
             }
+            view.sessionId = command.sessionId
             view.title = command.title
             view.body = command.body ?? command.text
             view.cardStatus = command.cardStatus ?? "thinking"
@@ -426,6 +459,19 @@ final class Renderer {
             window.orderFrontRegardless()
         case "hide":
             window.orderOut(nil)
+        case "clear":
+            view.title = nil
+            view.body = nil
+            view.sessionId = nil
+            view.showCard = false
+            view.cards = []
+            view.setCollapsed(false, animated: false)
+            resizeAndPosition()
+            view.needsDisplay = true
+        case "collapse":
+            if view.showCard && !view.visibleCards.isEmpty {
+                view.setCollapsed(true)
+            }
         case "quit":
             NSApp.terminate(nil)
         default:
@@ -506,6 +552,15 @@ final class Renderer {
         let sprite = view.spriteRect
         return NSPoint(x: window.frame.minX + sprite.minX,
                        y: window.frame.maxY - sprite.minY)
+    }
+
+    private func emitClick(sessionId: String) {
+        let payload: [String: String] = ["type": "click", "sessionId": sessionId]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let line = String(data: data, encoding: .utf8) else {
+            return
+        }
+        FileHandle.standardOutput.write((line + "\n").data(using: .utf8)!)
     }
 }
 

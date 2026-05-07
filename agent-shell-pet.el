@@ -514,6 +514,80 @@ the filesystem."
                   (mapconcat #'identity (agent-shell-pet--pet-roots) ", ")))
     pet))
 
+(defun agent-shell-pet--pet-choice-label (pet)
+  "Return a completion label for PET."
+  (let ((id (agent-shell-pet-id pet))
+        (display-name (agent-shell-pet-display-name pet)))
+    (if (or (null display-name)
+            (string-empty-p display-name)
+            (equal display-name id))
+        id
+      (format "%s (%s)" display-name id))))
+
+(defun agent-shell-pet--read-pet (&optional prompt)
+  "Read a discovered pet with completion using PROMPT."
+  (let* ((pets (agent-shell-pet-list-pets))
+         (choices (mapcar (lambda (pet)
+                            (cons (agent-shell-pet--pet-choice-label pet) pet))
+                          pets))
+         (current-label
+          (when agent-shell-pet-id
+            (car (seq-find
+                  (lambda (choice)
+                    (equal (agent-shell-pet-id (cdr choice)) agent-shell-pet-id))
+                  choices)))))
+    (unless choices
+      (user-error "No Codex-compatible pet found under %s"
+                  (mapconcat #'identity (agent-shell-pet--pet-roots) ", ")))
+    (let ((selection (completing-read (or prompt "Select avatar: ")
+                                      choices nil t nil nil current-label)))
+      (cdr (assoc selection choices)))))
+
+(defun agent-shell-pet--active-runtimes ()
+  "Return live pet runtimes known to this Emacs session."
+  (let (runtimes)
+    (when (agent-shell-pet--runtime-live-p agent-shell-pet--global-runtime)
+      (push agent-shell-pet--global-runtime runtimes))
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (agent-shell-pet--runtime-live-p agent-shell-pet--runtime)
+          (push agent-shell-pet--runtime runtimes))))
+    (seq-uniq (nreverse runtimes) #'eq)))
+
+(defun agent-shell-pet--switch-runtime-pet (runtime pet)
+  "Switch RUNTIME to PET without rebuilding its renderer."
+  (when (agent-shell-pet--runtime-live-p runtime)
+    (setf (agent-shell-pet--runtime-pet runtime) pet)
+    (setf (agent-shell-pet--runtime-frame-index runtime) 0)
+    (when (agent-shell-pet--display-runtime-p runtime)
+      (unless (and (agent-shell-pet--runtime-global-display-p runtime)
+                   agent-shell-pet--global-display-suppressed)
+        (agent-shell-pet--renderer-set-frame
+         runtime
+         (agent-shell-pet--current-frame-path runtime))
+        (agent-shell-pet--schedule-next-frame runtime)))))
+
+(defun agent-shell-pet--switch-active-pets (pet)
+  "Switch all active runtimes to PET in place."
+  (dolist (runtime (agent-shell-pet--active-runtimes))
+    (agent-shell-pet--switch-runtime-pet runtime pet))
+  (agent-shell-pet--global-refresh))
+
+;;;###autoload
+(defun agent-shell-pet-select-avatar (pet)
+  "Select the avatar used by agent-shell-pet.
+
+Interactively, prompt with completion over all discovered pets.  When a pet is
+already active, switch its runtime in place without rebuilding the renderer."
+  (interactive (list (agent-shell-pet--read-pet)))
+  (unless (agent-shell-pet-p pet)
+    (user-error "Invalid pet selection"))
+  (setq agent-shell-pet-id (agent-shell-pet-id pet))
+  (agent-shell-pet--ensure-frame-cache pet)
+  (agent-shell-pet--switch-active-pets pet)
+  (message "agent-shell-pet avatar: %s" (agent-shell-pet--pet-choice-label pet))
+  pet)
+
 (defun agent-shell-pet--codex-pets-url (path)
   "Return Codex Pets API URL for PATH."
   (concat (string-remove-suffix "/" agent-shell-pet-codex-pets-api-base)

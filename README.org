@@ -84,6 +84,12 @@ Choose a pet:
 (setq agent-shell-pet-id "clawd")
 #+end_src
 
+Or choose interactively from every discovered avatar:
+
+#+begin_src emacs-lisp
+M-x agent-shell-pet-select-avatar
+#+end_src
+
 Use one pet per =agent-shell= buffer instead of one global pet:
 
 #+begin_src emacs-lisp
@@ -158,6 +164,7 @@ For creating new pets, see [[file:docs/hatch-pet.org][docs/hatch-pet.org]].
 - =M-x global-agent-shell-pet-mode=
 - =M-x agent-shell-pet-show=
 - =M-x agent-shell-pet-hide=
+- =M-x agent-shell-pet-select-avatar=
 - =M-x agent-shell-pet-wave=
 - =M-x agent-shell-pet-macos-build-helper=
 
@@ -174,4 +181,3 @@ Byte-compile:
 #+begin_src bash
 emacs --batch -L . -f batch-byte-compile agent-shell-pet.el
 #+end_src
-

@@ -895,12 +895,26 @@ installs to Codex; otherwise use `agent-shell-pet-install-target'."
         (agent-shell-pet--dismiss-runtime-notification runtime)
       (agent-shell-pet--clear-runtime-card runtime))))
 
+(defun agent-shell-pet-dismiss-session (session-id)
+  "Dismiss the pet notification identified by native renderer SESSION-ID."
+  (interactive
+   (list (read-string "agent-shell-pet session id: ")))
+  (let ((runtime (agent-shell-pet--session-runtime session-id)))
+    (unless (agent-shell-pet--runtime-p runtime)
+      (user-error "No live agent-shell-pet session for %s" session-id))
+    (if (eq (agent-shell-pet--runtime-renderer runtime) 'global)
+        (agent-shell-pet--dismiss-runtime-notification runtime)
+      (agent-shell-pet--clear-runtime-card runtime))))
+
 (defun agent-shell-pet--macos-handle-event (event)
   "Handle a native macOS renderer EVENT alist."
   (pcase (alist-get 'type event)
     ("click"
      (when-let ((session-id (alist-get 'sessionId event)))
-       (agent-shell-pet-visit-session session-id)))))
+       (agent-shell-pet-visit-session session-id)))
+    ("dismiss"
+     (when-let ((session-id (alist-get 'sessionId event)))
+       (agent-shell-pet-dismiss-session session-id)))))
 
 (defun agent-shell-pet--macos-process-filter (process output)
   "Handle newline-delimited events from macOS helper PROCESS."

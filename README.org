@@ -15,6 +15,7 @@ agents.
 - One global pet by default, notifying about all agent-shell buffers.
 - Stacked activity cards for different =agent-shell= sessions.
 - Click a native activity card to jump back to that session's Emacs buffer.
+- Hover a native activity card to reveal a dismiss button for that card.
 - Visiting a session clears only that session's current card.
 - Optional one-pet-per-buffer mode.
 - Portable Emacs child-frame renderer.
@@ -173,5 +174,4 @@ Byte-compile:
 #+begin_src bash
 emacs --batch -L . -f batch-byte-compile agent-shell-pet.el
 #+end_src
-
 

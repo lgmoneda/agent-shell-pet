@@ -623,6 +623,28 @@ non-Lisp resources this way."
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(ert-deftest agent-shell-pet-test-dismiss-session-clears-card ()
+  (let* ((buffer (generate-new-buffer "Dismiss Buffer Agent"))
+         (runtime (agent-shell-pet--make-runtime
+                   :shell-buffer buffer
+                   :renderer 'macos-native
+                   :state 'review
+                   :status-text "Turn complete"
+                   :frame-index 0
+                   :updated-at (seconds-to-time 100)
+                   :session-id "dismiss-session"))
+         cleared)
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell-pet--renderer-clear-card)
+                   (lambda (target) (setq cleared target))))
+          (with-current-buffer buffer
+            (setq-local agent-shell-pet--runtime runtime))
+          (agent-shell-pet-dismiss-session "dismiss-session")
+          (should (eq cleared runtime))
+          (should-not (agent-shell-pet--runtime-status-text runtime)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (ert-deftest agent-shell-pet-test-session-runtime-finds-buffer-local-runtime ()
   (let ((buffer (generate-new-buffer "Buffer Pet")))
     (unwind-protect
@@ -654,6 +676,13 @@ non-Lisp resources this way."
                process
                "\"sessionId\":\"session-1\"}\n")
               (should (equal (alist-get 'type (car events)) "click"))
+              (should (equal (alist-get 'sessionId (car events))
+                             "session-1"))
+              (setq events nil)
+              (agent-shell-pet--macos-process-filter
+               process
+               "{\"type\":\"dismiss\",\"sessionId\":\"session-1\"}\n")
+              (should (equal (alist-get 'type (car events)) "dismiss"))
               (should (equal (alist-get 'sessionId (car events))
                              "session-1")))
           (delete-process process))))))

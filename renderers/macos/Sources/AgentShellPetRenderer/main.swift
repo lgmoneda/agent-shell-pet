@@ -55,9 +55,35 @@ final class PetView: NSView {
     var collapsed = false
     var collapseProgress: CGFloat = 0
     var onCollapseChanged: (() -> Void)?
+    private var hoveredCardIndex: Int?
     private var collapseAnimationTimer: Timer?
+    private var trackingArea: NSTrackingArea?
 
     override var isFlipped: Bool { true }
+
+    override func updateTrackingAreas() {
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let area = NSTrackingArea(rect: bounds,
+                                  options: [.activeAlways, .mouseMoved, .mouseEnteredAndExited, .inVisibleRect],
+                                  owner: self,
+                                  userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
+        super.updateTrackingAreas()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        updateHover(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if hoveredCardIndex != nil {
+            hoveredCardIndex = nil
+            needsDisplay = true
+        }
+    }
 
     var spriteRect: NSRect {
         spriteRect(forBoundsSize: bounds.size)
@@ -92,12 +118,13 @@ final class PetView: NSView {
         if hasVisibleCards && collapseProgress < 1 {
             let cardAlpha = 1 - smoothstep(collapseProgress)
             for (index, card) in visibleCards.enumerated() {
-                let y = cardY + CGFloat(index) * (cardHeight + cardGap)
+                let rect = cardRect(at: index, cardY: cardY)
                 withAlpha(cardAlpha) {
                     drawCard(title: card.title ?? "",
                              body: card.body ?? "",
                              status: card.cardStatus ?? "thinking",
-                             rect: NSRect(x: 0, y: y, width: min(cardWidth, bounds.width), height: cardHeight))
+                             rect: rect,
+                             showDismiss: hoveredCardIndex == index)
                 }
             }
         }
@@ -129,14 +156,20 @@ final class PetView: NSView {
         return false
     }
 
+    func dismissSessionId(at point: NSPoint) -> String? {
+        guard hasVisibleCards && collapseProgress < 1 else { return nil }
+        for (index, card) in visibleCards.enumerated() {
+            if dismissButtonRect(forCardAt: index).contains(point) {
+                return card.sessionId
+            }
+        }
+        return nil
+    }
+
     func cardSessionId(at point: NSPoint) -> String? {
         guard hasVisibleCards && collapseProgress < 1 else { return nil }
-        let spriteHeight = cellHeight * scale
-        let cardY = max(0, spriteHeight - cardPetOverlap)
         for (index, card) in visibleCards.enumerated() {
-            let y = cardY + CGFloat(index) * (cardHeight + cardGap)
-            let rect = NSRect(x: 0, y: y, width: min(cardWidth, bounds.width), height: cardHeight)
-            if rect.contains(point) {
+            if cardRect(at: index).contains(point) {
                 return card.sessionId
             }
         }
@@ -180,7 +213,37 @@ final class PetView: NSView {
         }
     }
 
-    private func drawCard(title: String, body: String, status: String, rect: NSRect) {
+    private func updateHover(at point: NSPoint) {
+        let nextIndex: Int?
+        if hasVisibleCards && collapseProgress < 1 {
+            nextIndex = visibleCards.indices.first { cardRect(at: $0).contains(point) }
+        } else {
+            nextIndex = nil
+        }
+        if hoveredCardIndex != nextIndex {
+            hoveredCardIndex = nextIndex
+            needsDisplay = true
+        }
+    }
+
+    private func cardRect(at index: Int) -> NSRect {
+        let spriteHeight = cellHeight * scale
+        let cardY = max(0, spriteHeight - cardPetOverlap)
+        return cardRect(at: index, cardY: cardY)
+    }
+
+    private func cardRect(at index: Int, cardY: CGFloat) -> NSRect {
+        let y = cardY + CGFloat(index) * (cardHeight + cardGap)
+        return NSRect(x: 0, y: y, width: min(cardWidth, bounds.width), height: cardHeight)
+    }
+
+    private func dismissButtonRect(forCardAt index: Int) -> NSRect {
+        let card = cardRect(at: index)
+        let size: CGFloat = 22
+        return NSRect(x: card.minX + 6, y: card.minY + 6, width: size, height: size)
+    }
+
+    private func drawCard(title: String, body: String, status: String, rect: NSRect, showDismiss: Bool) {
         let lightTheme = cardTheme == "light"
         let shadow = NSShadow()
         shadow.shadowBlurRadius = lightTheme ? 8 : 12
@@ -225,13 +288,48 @@ final class PetView: NSView {
             .paragraphStyle: bodyParagraph
         ]
 
-        let titleRect = NSRect(x: rect.minX + 14, y: rect.minY + 12, width: rect.width - 44, height: 18)
+        let titleLeft = rect.minX + (showDismiss ? 32 : 14)
+        let titleRect = NSRect(x: titleLeft, y: rect.minY + 12, width: rect.maxX - titleLeft - 44, height: 18)
         let bodyRect = NSRect(x: rect.minX + 14, y: rect.minY + 32, width: rect.width - 28, height: 30)
         let statusRect = NSRect(x: rect.maxX - 28, y: rect.minY + 15, width: 14, height: 14)
 
         (title as NSString).draw(in: titleRect, withAttributes: titleAttributes)
         (body as NSString).draw(in: bodyRect, withAttributes: bodyAttributes)
         drawStatus(status, in: statusRect, lightTheme: lightTheme)
+        if showDismiss {
+            drawDismissButton(in: dismissButtonRect(forCardAt: hoveredCardIndex ?? 0), lightTheme: lightTheme)
+        }
+    }
+
+    private func drawDismissButton(in rect: NSRect, lightTheme: Bool) {
+        if lightTheme {
+            NSColor(calibratedWhite: 1.0, alpha: 0.86).setFill()
+        } else {
+            NSColor(calibratedWhite: 0.16, alpha: 0.92).setFill()
+        }
+        NSBezierPath(ovalIn: rect).fill()
+        if lightTheme {
+            NSColor(calibratedWhite: 0.22, alpha: 0.24).setStroke()
+        } else {
+            NSColor.white.withAlphaComponent(0.22).setStroke()
+        }
+        let border = NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5))
+        border.lineWidth = 1
+        border.stroke()
+
+        let cross = NSBezierPath()
+        cross.move(to: NSPoint(x: rect.midX - 3.5, y: rect.midY - 3.5))
+        cross.line(to: NSPoint(x: rect.midX + 3.5, y: rect.midY + 3.5))
+        cross.move(to: NSPoint(x: rect.midX + 3.5, y: rect.midY - 3.5))
+        cross.line(to: NSPoint(x: rect.midX - 3.5, y: rect.midY + 3.5))
+        if lightTheme {
+            NSColor(calibratedWhite: 0.20, alpha: 0.72).setStroke()
+        } else {
+            NSColor.white.withAlphaComponent(0.86).setStroke()
+        }
+        cross.lineWidth = 1.4
+        cross.lineCapStyle = .round
+        cross.stroke()
     }
 
     private func drawStatus(_ status: String, in rect: NSRect, lightTheme: Bool) {
@@ -412,17 +510,22 @@ final class Renderer {
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         window.ignoresMouseEvents = false
+        window.acceptsMouseMovedEvents = true
         window.onUserDrag = { [weak self] in
             self?.userMovedWindow = true
         }
         window.onUserClick = { [weak self] point in
             guard let self else { return false }
             let localPoint = self.view.convert(point, from: nil)
+            if let sessionId = self.view.dismissSessionId(at: localPoint) {
+                self.emitEvent(type: "dismiss", sessionId: sessionId)
+                return true
+            }
             if self.view.toggleCollapseIfHit(at: localPoint) {
                 return true
             }
             if let sessionId = self.view.cardSessionId(at: localPoint) {
-                self.emitClick(sessionId: sessionId)
+                self.emitEvent(type: "click", sessionId: sessionId)
                 return true
             }
             return false
@@ -554,8 +657,8 @@ final class Renderer {
                        y: window.frame.maxY - sprite.minY)
     }
 
-    private func emitClick(sessionId: String) {
-        let payload: [String: String] = ["type": "click", "sessionId": sessionId]
+    private func emitEvent(type: String, sessionId: String) {
+        let payload: [String: String] = ["type": type, "sessionId": sessionId]
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let line = String(data: data, encoding: .utf8) else {
             return

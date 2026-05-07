@@ -299,13 +299,18 @@ non-Lisp resources this way."
                       (:title . "Read README.org")))
                    "Done: README.org"))))
 
-(ert-deftest agent-shell-pet-test-turn-complete-returns-to-idle ()
-  (let (calls scheduled)
+(ert-deftest agent-shell-pet-test-turn-complete-collapses-without-clearing ()
+  (let (calls scheduled collapsed)
     (cl-letf (((symbol-function 'agent-shell-pet--set-state)
-               (lambda (_runtime state &optional status-text)
+               (lambda (runtime state &optional status-text)
+                 (setf (agent-shell-pet--runtime-state runtime) state)
+                 (setf (agent-shell-pet--runtime-status-text runtime)
+                       status-text)
                  (push (list state status-text) calls)))
               ((symbol-function 'agent-shell-pet--runtime-live-p)
                (lambda (_runtime) t))
+              ((symbol-function 'agent-shell-pet--renderer-collapse)
+               (lambda (_runtime) (setq collapsed t)))
               ((symbol-function 'run-at-time)
                (lambda (seconds _repeat function &rest args)
                  (setq scheduled (list seconds function args))
@@ -320,10 +325,12 @@ non-Lisp resources this way."
         (should (equal (pop calls) '(review "Turn complete")))
         (should (equal (car scheduled) 2.5))
         (apply (cadr scheduled) (caddr scheduled))
-        (should (equal (pop calls) '(idle nil)))))))
+        (should collapsed)
+        (should-not calls)
+        (should-not (agent-shell-pet--runtime-transient-timer runtime))))))
 
 (ert-deftest agent-shell-pet-test-completion-duration-default ()
-  (should (= agent-shell-pet-completion-display-seconds 10.0)))
+  (should (= agent-shell-pet-completion-display-seconds 20.0)))
 
 (ert-deftest agent-shell-pet-test-size-presets ()
   (let ((agent-shell-pet-scale 1.0))
@@ -410,7 +417,39 @@ non-Lisp resources this way."
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
-(ert-deftest agent-shell-pet-test-prompt-ready-does-not-flash-completion-away ()
+(ert-deftest agent-shell-pet-test-selected-buffer-clears-buffer-card ()
+  (let* ((agent-shell-pet-scope 'buffer)
+         (global-agent-shell-pet-mode t)
+         (agent-shell-pet-dismiss-notification-on-buffer-visit t)
+         (buffer (generate-new-buffer "Visited Buffer Pet"))
+         (runtime (agent-shell-pet--make-runtime
+                   :shell-buffer buffer
+                   :renderer 'macos-native
+                   :state 'review
+                   :status-text "Turn complete"
+                   :frame-index 0
+                   :updated-at (seconds-to-time 100)))
+         cleared)
+    (unwind-protect
+        (cl-letf (((symbol-function 'selected-window)
+                   (lambda () 'agent-shell-pet-test-window))
+                  ((symbol-function 'window-buffer)
+                   (lambda (_window) buffer))
+                  ((symbol-function 'agent-shell-pet--renderer-clear-card)
+                   (lambda (target) (setq cleared target))))
+          (with-current-buffer buffer
+            (setq-local agent-shell-pet-mode t)
+            (setq-local agent-shell-pet--runtime runtime))
+          (agent-shell-pet--maybe-clear-selected-buffer-card)
+          (should (eq cleared runtime))
+          (should-not (agent-shell-pet--runtime-status-text runtime))
+          (should (equal (agent-shell-pet--runtime-dismissed-at runtime)
+                         (seconds-to-time 100)))
+          (should-not (agent-shell-pet--runtime-transient-timer runtime)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest agent-shell-pet-test-prompt-ready-does-not-clear-completion ()
   (let (calls scheduled)
     (cl-letf (((symbol-function 'agent-shell-pet--set-state)
                (lambda (_runtime state &optional status-text)
@@ -430,7 +469,20 @@ non-Lisp resources this way."
         (agent-shell-pet--handle-event runtime '((:event . prompt-ready)))
         (should (equal calls '((review "Turn complete"))))
         (apply (cadr scheduled) (caddr scheduled))
-        (should (equal (pop calls) '(idle nil)))))))
+        (should (equal calls '((review "Turn complete"))))))))
+
+(ert-deftest agent-shell-pet-test-idle-does-not-clear-collapsed-completion ()
+  (let (calls)
+    (cl-letf (((symbol-function 'agent-shell-pet--set-state)
+               (lambda (_runtime state &optional status-text)
+                 (push (list state status-text) calls))))
+      (let ((runtime (agent-shell-pet--make-runtime
+                      :state 'review
+                      :status-text "Turn complete"
+                      :frame-index 0)))
+        (agent-shell-pet--handle-event runtime '((:event . idle)))
+        (agent-shell-pet--handle-event runtime '((:event . prompt-ready)))
+        (should-not calls)))))
 
 (ert-deftest agent-shell-pet-test-input-submitted-starts-thinking ()
   (let (calls)
@@ -480,6 +532,161 @@ non-Lisp resources this way."
                                                  :status-text "Stuck"))
                  "error")))
 
+(ert-deftest agent-shell-pet-test-macos-collapse-sends-command ()
+  (let (payloads)
+    (cl-letf (((symbol-function 'agent-shell-pet--macos-helper-live-p)
+               (lambda (_runtime) t))
+              ((symbol-function 'agent-shell-pet--macos-send)
+               (lambda (_runtime payload) (push payload payloads))))
+      (let ((runtime (agent-shell-pet--make-runtime :renderer 'macos-native)))
+        (agent-shell-pet--renderer-collapse runtime)
+        (should (equal payloads '(((type . "collapse")))))))))
+
+(ert-deftest agent-shell-pet-test-macos-clear-card-sends-command ()
+  (let (payloads)
+    (cl-letf (((symbol-function 'agent-shell-pet--macos-helper-live-p)
+               (lambda (_runtime) t))
+              ((symbol-function 'agent-shell-pet--macos-send)
+               (lambda (_runtime payload) (push payload payloads))))
+      (let ((runtime (agent-shell-pet--make-runtime :renderer 'macos-native)))
+        (agent-shell-pet--renderer-clear-card runtime)
+        (should (equal payloads '(((type . "clear")))))))))
+
+(ert-deftest agent-shell-pet-test-notification-card-includes-session-id ()
+  (let ((runtime (agent-shell-pet--make-runtime :state 'running
+                                                :status-text "On it")))
+    (should (stringp (alist-get 'sessionId
+                                (agent-shell-pet--notification-card runtime))))
+    (should (equal (alist-get 'sessionId
+                              (agent-shell-pet--notification-card runtime))
+                   (agent-shell-pet--runtime-session-id runtime)))))
+
+(ert-deftest agent-shell-pet-test-visit-session-pops-to-buffer ()
+  (let* ((agent-shell-pet--global-runtimes (make-hash-table :test #'eq))
+         (buffer (generate-new-buffer "Visit Agent"))
+         (runtime (agent-shell-pet--make-runtime
+                   :shell-buffer buffer
+                   :renderer 'global
+                   :state 'running
+                   :frame-index 0
+                   :status-text "Working"
+                   :session-id "session-1"))
+         visited focused dismissed)
+    (unwind-protect
+        (cl-letf (((symbol-function 'pop-to-buffer)
+                   (lambda (target)
+                     (setq visited target)
+                     (get-buffer-window target t)))
+                  ((symbol-function 'selected-window)
+                   (lambda () (frame-root-window (selected-frame))))
+                  ((symbol-function 'select-frame-set-input-focus)
+                   (lambda (_frame) (setq focused t)))
+                  ((symbol-function 'agent-shell-pet--dismiss-runtime-notification)
+                   (lambda (target) (setq dismissed target))))
+          (puthash buffer runtime agent-shell-pet--global-runtimes)
+          (agent-shell-pet-visit-session "session-1")
+          (should (eq visited buffer))
+          (should focused)
+          (should (eq dismissed runtime)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest agent-shell-pet-test-visit-session-clears-buffer-card ()
+  (let* ((buffer (generate-new-buffer "Visit Buffer Agent"))
+         (runtime (agent-shell-pet--make-runtime
+                   :shell-buffer buffer
+                   :renderer 'macos-native
+                   :state 'review
+                   :status-text "Turn complete"
+                   :frame-index 0
+                   :updated-at (seconds-to-time 100)
+                   :session-id "buffer-session"))
+         visited focused cleared)
+    (unwind-protect
+        (cl-letf (((symbol-function 'pop-to-buffer)
+                   (lambda (target)
+                     (setq visited target)
+                     (get-buffer-window target t)))
+                  ((symbol-function 'selected-window)
+                   (lambda () (frame-root-window (selected-frame))))
+                  ((symbol-function 'select-frame-set-input-focus)
+                   (lambda (_frame) (setq focused t)))
+                  ((symbol-function 'agent-shell-pet--renderer-clear-card)
+                   (lambda (target) (setq cleared target))))
+          (with-current-buffer buffer
+            (setq-local agent-shell-pet--runtime runtime))
+          (agent-shell-pet-visit-session "buffer-session")
+          (should (eq visited buffer))
+          (should focused)
+          (should (eq cleared runtime))
+          (should-not (agent-shell-pet--runtime-status-text runtime)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest agent-shell-pet-test-dismiss-session-clears-card ()
+  (let* ((buffer (generate-new-buffer "Dismiss Buffer Agent"))
+         (runtime (agent-shell-pet--make-runtime
+                   :shell-buffer buffer
+                   :renderer 'macos-native
+                   :state 'review
+                   :status-text "Turn complete"
+                   :frame-index 0
+                   :updated-at (seconds-to-time 100)
+                   :session-id "dismiss-session"))
+         cleared)
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell-pet--renderer-clear-card)
+                   (lambda (target) (setq cleared target))))
+          (with-current-buffer buffer
+            (setq-local agent-shell-pet--runtime runtime))
+          (agent-shell-pet-dismiss-session "dismiss-session")
+          (should (eq cleared runtime))
+          (should-not (agent-shell-pet--runtime-status-text runtime)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest agent-shell-pet-test-session-runtime-finds-buffer-local-runtime ()
+  (let ((buffer (generate-new-buffer "Buffer Pet")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local agent-shell-pet--runtime
+                      (agent-shell-pet--make-runtime
+                       :shell-buffer buffer
+                       :renderer 'macos-native
+                       :state 'running
+                       :frame-index 0
+                       :session-id "buffer-session"))
+          (should (eq (agent-shell-pet--session-runtime "buffer-session")
+                      agent-shell-pet--runtime)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest agent-shell-pet-test-macos-process-filter-handles-click-event ()
+  (let (events)
+    (cl-letf (((symbol-function 'agent-shell-pet--macos-handle-event)
+               (lambda (event) (push event events))))
+      (let ((process (start-process "agent-shell-pet-test" nil "cat")))
+        (unwind-protect
+            (progn
+              (agent-shell-pet--macos-process-filter
+               process
+               "{\"type\":\"click\",")
+              (should-not events)
+              (agent-shell-pet--macos-process-filter
+               process
+               "\"sessionId\":\"session-1\"}\n")
+              (should (equal (alist-get 'type (car events)) "click"))
+              (should (equal (alist-get 'sessionId (car events))
+                             "session-1"))
+              (setq events nil)
+              (agent-shell-pet--macos-process-filter
+               process
+               "{\"type\":\"dismiss\",\"sessionId\":\"session-1\"}\n")
+              (should (equal (alist-get 'type (car events)) "dismiss"))
+              (should (equal (alist-get 'sessionId (car events))
+                             "session-1")))
+          (delete-process process))))))
+
 (ert-deftest agent-shell-pet-test-speech-bubble-theme-option ()
   (let ((agent-shell-pet-speech-bubble-theme 'light))
     (should (equal (symbol-name agent-shell-pet-speech-bubble-theme)
@@ -493,6 +700,17 @@ non-Lisp resources this way."
                   :renderer 'child-frame)))
     (should-not (agent-shell-pet--runtime-live-p runtime))
     (should-not (agent-shell-pet--tick runtime))))
+
+(ert-deftest agent-shell-pet-test-old-runtime-shape-is-stale ()
+  (let* ((runtime (agent-shell-pet--make-runtime))
+         (old-runtime (apply #'record
+                             (cl-loop for index below
+                                      (1- agent-shell-pet--runtime-vector-length)
+                                      collect (aref runtime index)))))
+    (should (agent-shell-pet--runtime-p old-runtime))
+    (should-not (agent-shell-pet--runtime-current-shape-p old-runtime))
+    (should-not (agent-shell-pet--runtime-live-p old-runtime))
+    (should-not (agent-shell-pet--ensure-runtime-session-id old-runtime))))
 
 (ert-deftest agent-shell-pet-test-hide-from-any-buffer-suppresses-global ()
   "`agent-shell-pet-hide' must hide the global pet regardless of caller buffer."

@@ -14,7 +14,9 @@ agents.
 
 - One global pet by default, notifying about all agent-shell buffers.
 - Stacked activity cards for different =agent-shell= sessions.
-- Visiting a session dismisses only that session's current card.
+- Click a native activity card to jump back to that session's Emacs buffer.
+- Hover a native activity card to reveal a dismiss button for that card.
+- Visiting a session clears only that session's current card.
 - Optional one-pet-per-buffer mode.
 - Portable Emacs child-frame renderer.
 - macOS native renderer that floats above other app windows.
@@ -100,6 +102,14 @@ Use the dark activity card:
 (setq agent-shell-pet-speech-bubble-theme 'dark)
 #+end_src
 
+Completed turns stay visible for a short window, then collapse into a small
+badge that remains available as a jump target until you visit the related
+=agent-shell= buffer:
+
+#+begin_src emacs-lisp
+(setq agent-shell-pet-completion-display-seconds 20.0)
+#+end_src
+
 * Installing More Pets
 
 =agent-shell-pet= discovers pets from:
@@ -164,6 +174,4 @@ Byte-compile:
 #+begin_src bash
 emacs --batch -L . -f batch-byte-compile agent-shell-pet.el
 #+end_src
-
-
 

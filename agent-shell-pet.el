@@ -242,8 +242,8 @@ is non-nil."
   :type 'boolean
   :group 'agent-shell-pet)
 
-(defcustom agent-shell-pet-completion-display-seconds 10.0
-  "Seconds to show the turn-complete state before returning to idle."
+(defcustom agent-shell-pet-completion-display-seconds 20.0
+  "Seconds to show a completed turn expanded before collapsing its card."
   :type 'number
   :group 'agent-shell-pet)
 
@@ -278,7 +278,7 @@ is non-nil."
                (:constructor agent-shell-pet--make-runtime))
   pet shell-buffer renderer state status-text frame-index timer subscriptions
   transient-timer child-frame child-buffer native-process global-display-p
-  updated-at dismissed-at)
+  updated-at dismissed-at session-id)
 
 (defvar-local agent-shell-pet--runtime nil
   "Buffer-local pet runtime.")
@@ -298,10 +298,24 @@ skipped so the pet stays hidden across all agent-shell buffers until
 (defvar global-agent-shell-pet-mode nil
   "Non-nil when `global-agent-shell-pet-mode' is enabled.")
 
+(defvar agent-shell-pet--session-counter 0
+  "Counter used to assign native renderer session ids.")
+
+(defconst agent-shell-pet--runtime-vector-length
+  (length (agent-shell-pet--make-runtime))
+  "Vector length of the current `agent-shell-pet--runtime' struct.")
+
+(defun agent-shell-pet--runtime-current-shape-p (runtime)
+  "Return non-nil when RUNTIME has the current struct shape."
+  (and (or (recordp runtime)
+           (vectorp runtime))
+       (>= (length runtime) agent-shell-pet--runtime-vector-length)))
+
 (defun agent-shell-pet--runtime-live-p (runtime)
   "Return non-nil when RUNTIME looks compatible with this package version."
   (condition-case nil
       (and (agent-shell-pet--runtime-p runtime)
+           (agent-shell-pet--runtime-current-shape-p runtime)
            (agent-shell-pet-p (agent-shell-pet--runtime-pet runtime))
            (or (agent-shell-pet--runtime-global-display-p runtime)
                (buffer-live-p (agent-shell-pet--runtime-shell-buffer runtime)))
@@ -827,6 +841,102 @@ installs to Codex; otherwise use `agent-shell-pet-install-target'."
     (and (processp process)
          (process-live-p process))))
 
+(defun agent-shell-pet--ensure-runtime-session-id (runtime)
+  "Return the stable native renderer session id for RUNTIME."
+  (when (agent-shell-pet--runtime-current-shape-p runtime)
+    (or (agent-shell-pet--runtime-session-id runtime)
+        (setf (agent-shell-pet--runtime-session-id runtime)
+              (format "%s:%d" (emacs-pid)
+                      (cl-incf agent-shell-pet--session-counter))))))
+
+(defun agent-shell-pet--session-runtime (session-id)
+  "Return the live runtime identified by SESSION-ID."
+  (let (found)
+    (when (and (stringp session-id)
+               (not (string-empty-p session-id)))
+      (when (and (agent-shell-pet--runtime-p agent-shell-pet--global-runtime)
+                 (equal session-id
+                        (agent-shell-pet--ensure-runtime-session-id
+                         agent-shell-pet--global-runtime)))
+        (setq found agent-shell-pet--global-runtime))
+      (maphash
+       (lambda (_buffer runtime)
+         (when (and (not found)
+                    (agent-shell-pet--runtime-p runtime)
+                    (equal session-id
+                           (agent-shell-pet--ensure-runtime-session-id runtime)))
+           (setq found runtime)))
+       agent-shell-pet--global-runtimes)
+      (dolist (buffer (buffer-list))
+        (when (and (not found)
+                   (buffer-live-p buffer))
+          (with-current-buffer buffer
+            (when (and (bound-and-true-p agent-shell-pet--runtime)
+                       (equal session-id
+                              (agent-shell-pet--ensure-runtime-session-id
+                               agent-shell-pet--runtime)))
+              (setq found agent-shell-pet--runtime))))))
+    (when (and (agent-shell-pet--runtime-p found)
+               (buffer-live-p (agent-shell-pet--runtime-shell-buffer found)))
+      found)))
+
+(defun agent-shell-pet-visit-session (session-id)
+  "Visit the agent-shell buffer identified by native renderer SESSION-ID."
+  (interactive
+   (list (read-string "agent-shell-pet session id: ")))
+  (let* ((runtime (agent-shell-pet--session-runtime session-id))
+         (buffer (and runtime
+                      (agent-shell-pet--runtime-shell-buffer runtime))))
+    (unless (buffer-live-p buffer)
+      (user-error "No live agent-shell-pet session for %s" session-id))
+    (pop-to-buffer buffer)
+    (select-frame-set-input-focus (window-frame (selected-window)))
+    (if (eq (agent-shell-pet--runtime-renderer runtime) 'global)
+        (agent-shell-pet--dismiss-runtime-notification runtime)
+      (agent-shell-pet--clear-runtime-card runtime))))
+
+(defun agent-shell-pet-dismiss-session (session-id)
+  "Dismiss the pet notification identified by native renderer SESSION-ID."
+  (interactive
+   (list (read-string "agent-shell-pet session id: ")))
+  (let ((runtime (agent-shell-pet--session-runtime session-id)))
+    (unless (agent-shell-pet--runtime-p runtime)
+      (user-error "No live agent-shell-pet session for %s" session-id))
+    (if (eq (agent-shell-pet--runtime-renderer runtime) 'global)
+        (agent-shell-pet--dismiss-runtime-notification runtime)
+      (agent-shell-pet--clear-runtime-card runtime))))
+
+(defun agent-shell-pet--macos-handle-event (event)
+  "Handle a native macOS renderer EVENT alist."
+  (pcase (alist-get 'type event)
+    ("click"
+     (when-let ((session-id (alist-get 'sessionId event)))
+       (agent-shell-pet-visit-session session-id)))
+    ("dismiss"
+     (when-let ((session-id (alist-get 'sessionId event)))
+       (agent-shell-pet-dismiss-session session-id)))))
+
+(defun agent-shell-pet--macos-process-filter (process output)
+  "Handle newline-delimited events from macOS helper PROCESS."
+  (let* ((pending (concat (or (process-get process 'agent-shell-pet-pending) "")
+                          output))
+         (parts (split-string pending "\n"))
+         (complete (string-suffix-p "\n" pending))
+         (lines (if complete parts (butlast parts))))
+    (process-put process 'agent-shell-pet-pending
+                 (if complete "" (car (last parts))))
+    (dolist (line lines)
+      (unless (string-empty-p line)
+        (condition-case err
+            (let ((json-object-type 'alist)
+                  (json-array-type 'list)
+                  (json-key-type 'symbol))
+              (agent-shell-pet--macos-handle-event
+               (json-read-from-string line)))
+          (error
+           (message "agent-shell-pet: ignored invalid macOS helper event: %s"
+                    (error-message-string err))))))))
+
 (defun agent-shell-pet--macos-helper-build-dir ()
   "Return the directory containing the macOS helper Makefile."
   (file-name-directory agent-shell-pet-macos-helper-path))
@@ -904,6 +1014,7 @@ sources)."
             :buffer nil
             :command (list agent-shell-pet-macos-helper-path)
             :connection-type 'pipe
+            :filter #'agent-shell-pet--macos-process-filter
             :noquery t
             :sentinel (lambda (process _event)
                         (when (memq (process-status process) '(exit signal))
@@ -954,7 +1065,8 @@ sources)."
 
 (defun agent-shell-pet--notification-card (runtime)
   "Return a JSON-friendly notification card for RUNTIME."
-  `((title . ,(or (agent-shell-pet--macos-card-title runtime) ""))
+  `((sessionId . ,(agent-shell-pet--ensure-runtime-session-id runtime))
+    (title . ,(or (agent-shell-pet--macos-card-title runtime) ""))
     (body . ,(or (agent-shell-pet--runtime-status-text runtime) ""))
     (cardStatus . ,(agent-shell-pet--macos-card-status runtime))))
 
@@ -976,6 +1088,28 @@ sources)."
     (delete-process (agent-shell-pet--runtime-native-process runtime))
     (setf (agent-shell-pet--runtime-native-process runtime) nil)))
 
+(defun agent-shell-pet--macos-collapse (runtime)
+  "Collapse RUNTIME's macOS native notification card."
+  (when (agent-shell-pet--macos-helper-live-p runtime)
+    (agent-shell-pet--macos-send runtime '((type . "collapse")))))
+
+(defun agent-shell-pet--macos-clear-card (runtime)
+  "Clear RUNTIME's macOS native notification card."
+  (when (agent-shell-pet--macos-helper-live-p runtime)
+    (agent-shell-pet--macos-send runtime '((type . "clear")))))
+
+(defun agent-shell-pet--renderer-collapse (runtime)
+  "Collapse RUNTIME's renderer when supported."
+  (pcase (agent-shell-pet--runtime-renderer runtime)
+    ('macos-native (agent-shell-pet--macos-collapse runtime))
+    (_ nil)))
+
+(defun agent-shell-pet--renderer-clear-card (runtime)
+  "Clear RUNTIME's visible text card when supported."
+  (pcase (agent-shell-pet--runtime-renderer runtime)
+    ('macos-native (agent-shell-pet--macos-clear-card runtime))
+    (_ nil)))
+
 (defun agent-shell-pet--macos-set-frame (runtime frame-file)
   "Render FRAME-FILE for RUNTIME using the macOS native helper."
   (let ((notifications (and (agent-shell-pet--runtime-global-display-p runtime)
@@ -984,6 +1118,7 @@ sources)."
      runtime
      `((type . "frame")
        (path . ,frame-file)
+       (sessionId . ,(agent-shell-pet--ensure-runtime-session-id runtime))
        (title . ,(or (agent-shell-pet--macos-card-title runtime) ""))
        (body . ,(or (agent-shell-pet--runtime-status-text runtime) ""))
        (cardStatus . ,(agent-shell-pet--macos-card-status runtime))
@@ -1129,6 +1264,13 @@ sources)."
   (and (agent-shell-pet--runtime-p runtime)
        (agent-shell-pet--runtime-transient-timer runtime)))
 
+(defun agent-shell-pet--completion-active-p (runtime)
+  "Return non-nil when RUNTIME is showing a completed turn awaiting visit."
+  (and (agent-shell-pet--runtime-p runtime)
+       (eq (agent-shell-pet--runtime-state runtime) 'review)
+       (member (agent-shell-pet--runtime-status-text runtime)
+               '("Done" "Turn complete"))))
+
 (defun agent-shell-pet--set-transient-state (runtime state seconds)
   "Set RUNTIME to STATE for SECONDS, then return to idle."
   (agent-shell-pet--cancel-transient runtime)
@@ -1146,21 +1288,30 @@ sources)."
                             previous-text)))
                        runtime))))
 
-(defun agent-shell-pet--set-state-then-idle (runtime state status-text seconds)
-  "Set RUNTIME to STATE with STATUS-TEXT for SECONDS, then return to idle."
+(defun agent-shell-pet--completion-display-runtime (runtime)
+  "Return the visible renderer runtime for RUNTIME's completion card."
+  (if (eq (agent-shell-pet--runtime-renderer runtime) 'global)
+      agent-shell-pet--global-runtime
+    runtime))
+
+(defun agent-shell-pet--collapse-completion (runtime)
+  "Collapse RUNTIME's current completion notification without dismissing it."
+  (when (and (agent-shell-pet--runtime-live-p runtime)
+             (eq (agent-shell-pet--runtime-state runtime) 'review)
+             (member (agent-shell-pet--runtime-status-text runtime)
+                     '("Done" "Turn complete")))
+    (setf (agent-shell-pet--runtime-transient-timer runtime) nil)
+    (when-let ((display-runtime (agent-shell-pet--completion-display-runtime
+                                 runtime)))
+      (agent-shell-pet--renderer-collapse display-runtime))))
+
+(defun agent-shell-pet--set-state-then-collapse (runtime state status-text seconds)
+  "Set RUNTIME to STATE with STATUS-TEXT for SECONDS, then collapse its card."
   (agent-shell-pet--cancel-transient runtime)
   (agent-shell-pet--set-state runtime state status-text)
   (setf (agent-shell-pet--runtime-transient-timer runtime)
         (run-at-time seconds nil
-                     (lambda (runtime)
-                       (when (agent-shell-pet--runtime-live-p runtime)
-                         (setf (agent-shell-pet--runtime-transient-timer
-                                runtime)
-                               nil)
-                         (agent-shell-pet--set-state
-                          runtime
-                          'idle
-                          agent-shell-pet-idle-status-text)))
+                     #'agent-shell-pet--collapse-completion
                      runtime)))
 
 (defun agent-shell-pet--tool-call-state (tool-call)
@@ -1289,7 +1440,8 @@ sources)."
        (agent-shell-pet--set-state runtime 'running
                                    agent-shell-pet-thinking-status-text))
       ((or 'prompt-ready 'idle)
-       (unless (agent-shell-pet--transient-active-p runtime)
+       (unless (or (agent-shell-pet--transient-active-p runtime)
+                   (agent-shell-pet--completion-active-p runtime))
          (agent-shell-pet--set-state runtime 'idle agent-shell-pet-idle-status-text)))
       ('permission-request
        (agent-shell-pet--cancel-transient runtime)
@@ -1303,7 +1455,7 @@ sources)."
           (agent-shell-pet--tool-call-text tool-call))))
       ('turn-complete
        (if (agent-shell-pet--turn-success-p data)
-           (agent-shell-pet--set-state-then-idle
+           (agent-shell-pet--set-state-then-collapse
             runtime
             'review
             "Turn complete"
@@ -1385,20 +1537,39 @@ sources)."
   "Dismiss RUNTIME's current global notification."
   (when (and (agent-shell-pet--runtime-p runtime)
              (agent-shell-pet--runtime-updated-at runtime))
+    (agent-shell-pet--cancel-transient runtime)
     (setf (agent-shell-pet--runtime-dismissed-at runtime)
           (agent-shell-pet--runtime-updated-at runtime))
     (agent-shell-pet--global-refresh)))
 
-(defun agent-shell-pet--maybe-dismiss-selected-notification ()
-  "Dismiss the selected agent-shell buffer's current global notification."
+(defun agent-shell-pet--clear-runtime-card (runtime)
+  "Clear RUNTIME's current visible text card."
+  (when (and (agent-shell-pet--runtime-p runtime)
+             (not (eq (agent-shell-pet--runtime-state runtime) 'idle)))
+    (agent-shell-pet--cancel-transient runtime)
+    (when (agent-shell-pet--runtime-updated-at runtime)
+      (setf (agent-shell-pet--runtime-dismissed-at runtime)
+            (agent-shell-pet--runtime-updated-at runtime)))
+    (setf (agent-shell-pet--runtime-status-text runtime) nil)
+    (unless (eq (agent-shell-pet--runtime-renderer runtime) 'global)
+      (agent-shell-pet--renderer-clear-card runtime))))
+
+(defun agent-shell-pet--maybe-clear-selected-buffer-card ()
+  "Clear pet text cards for the selected agent-shell buffer."
   (when (and agent-shell-pet-dismiss-notification-on-buffer-visit
-             (eq agent-shell-pet-scope 'global)
              global-agent-shell-pet-mode)
-    (when-let* ((buffer (window-buffer (selected-window)))
-                (runtime (gethash buffer agent-shell-pet--global-runtimes))
-                ((not (eq (agent-shell-pet--runtime-state runtime) 'idle)))
-                ((not (agent-shell-pet--runtime-dismissed-p runtime))))
-      (agent-shell-pet--dismiss-runtime-notification runtime))))
+    (when-let ((buffer (window-buffer (selected-window))))
+      (if (eq agent-shell-pet-scope 'global)
+          (when-let* ((runtime (gethash buffer agent-shell-pet--global-runtimes))
+                      ((not (eq (agent-shell-pet--runtime-state runtime) 'idle)))
+                      ((not (agent-shell-pet--runtime-dismissed-p runtime))))
+            (agent-shell-pet--dismiss-runtime-notification runtime))
+        (with-current-buffer buffer
+          (when (and (bound-and-true-p agent-shell-pet-mode)
+                     (agent-shell-pet--runtime-p agent-shell-pet--runtime)
+                     (not (agent-shell-pet--runtime-dismissed-p
+                           agent-shell-pet--runtime)))
+            (agent-shell-pet--clear-runtime-card agent-shell-pet--runtime)))))))
 
 ;;;###autoload
 (define-minor-mode agent-shell-pet-mode
@@ -1476,14 +1647,14 @@ sources)."
       (progn
         (add-hook 'agent-shell-mode-hook #'agent-shell-pet--maybe-enable)
         (add-hook 'buffer-list-update-hook
-                  #'agent-shell-pet--maybe-dismiss-selected-notification)
+                  #'agent-shell-pet--maybe-clear-selected-buffer-card)
         (dolist (buffer (buffer-list))
           (with-current-buffer buffer
             (when (derived-mode-p 'agent-shell-mode)
               (agent-shell-pet--maybe-enable)))))
     (remove-hook 'agent-shell-mode-hook #'agent-shell-pet--maybe-enable)
     (remove-hook 'buffer-list-update-hook
-                 #'agent-shell-pet--maybe-dismiss-selected-notification)
+                 #'agent-shell-pet--maybe-clear-selected-buffer-card)
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer
         (when agent-shell-pet-mode

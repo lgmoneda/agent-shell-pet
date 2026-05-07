@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import QuartzCore
 
 let cellWidth: CGFloat = 192
 let cellHeight: CGFloat = 208
@@ -41,47 +42,116 @@ final class PetView: NSView {
     var cards: [NotificationCard] = []
     var scale: CGFloat = 1.0
     var spinnerPhase: CGFloat = 0
+    var collapsed = false
+    var collapseProgress: CGFloat = 0
+    var onCollapseChanged: (() -> Void)?
+    private var collapseAnimationTimer: Timer?
 
     override var isFlipped: Bool { true }
+
+    var spriteRect: NSRect {
+        spriteRect(forBoundsSize: bounds.size)
+    }
+
+    func spriteRect(forBoundsSize size: NSSize) -> NSRect {
+        let spriteWidth = cellWidth * scale
+        let spriteHeight = cellHeight * scale
+        let spriteX = max(0, size.width - spriteWidth - petCardInset)
+        return NSRect(x: spriteX, y: 0, width: spriteWidth, height: spriteHeight)
+    }
+
+    var visibleCards: [NotificationCard] {
+        if cards.isEmpty {
+            return showCard ? [NotificationCard(title: title, body: body, cardStatus: cardStatus)] : []
+        }
+        return cards
+    }
+
+    private var hasVisibleCards: Bool {
+        showCard && !visibleCards.isEmpty
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         NSColor.clear.setFill()
         dirtyRect.fill()
 
-        let spriteWidth = cellWidth * scale
         let spriteHeight = cellHeight * scale
         let cardY = max(0, spriteHeight - cardPetOverlap)
-        let spriteX = max(0, bounds.width - spriteWidth - petCardInset)
+        let currentSpriteRect = spriteRect
 
-        let visibleCards: [NotificationCard]
-        if cards.isEmpty {
-            visibleCards = showCard ? [NotificationCard(title: title, body: body, cardStatus: cardStatus)] : []
-        } else {
-            visibleCards = cards
-        }
-
-        if showCard {
+        if hasVisibleCards && collapseProgress < 1 {
+            let cardAlpha = 1 - smoothstep(collapseProgress)
             for (index, card) in visibleCards.enumerated() {
                 let y = cardY + CGFloat(index) * (cardHeight + cardGap)
-                drawCard(title: card.title ?? "",
-                         body: card.body ?? "",
-                         status: card.cardStatus ?? "thinking",
-                         rect: NSRect(x: 0, y: y, width: min(cardWidth, bounds.width), height: cardHeight))
+                withAlpha(cardAlpha) {
+                    drawCard(title: card.title ?? "",
+                             body: card.body ?? "",
+                             status: card.cardStatus ?? "thinking",
+                             rect: NSRect(x: 0, y: y, width: min(cardWidth, bounds.width), height: cardHeight))
+                }
             }
         }
 
         if let image {
-            image.draw(in: NSRect(x: spriteX,
-                                  y: 0,
-                                  width: spriteWidth,
-                                  height: spriteHeight),
+            image.draw(in: currentSpriteRect,
                        from: .zero,
                        operation: .sourceOver,
                        fraction: 1.0,
                        respectFlipped: true,
                        hints: [.interpolation: NSImageInterpolation.none])
-            if showCard {
-                drawChevronBadge(spriteRect: NSRect(x: spriteX, y: 0, width: spriteWidth, height: spriteHeight))
+            if hasVisibleCards {
+                if collapseProgress >= 0.5 {
+                    drawCollapsedBadge(count: visibleCards.count, status: collapsedStatus(), spriteRect: currentSpriteRect)
+                } else {
+                    drawChevronBadge(spriteRect: currentSpriteRect)
+                }
+            }
+        }
+    }
+
+    func toggleCollapseIfHit(at point: NSPoint) -> Bool {
+        if hasVisibleCards {
+            if collapseHitRect(spriteRect: spriteRect).contains(point) {
+                setCollapsed(!collapsed)
+                return true
+            }
+        }
+        return false
+    }
+
+    func setCollapsed(_ value: Bool, animated: Bool = true) {
+        collapsed = value
+        animateCollapse(to: value ? 1 : 0, animated: animated)
+    }
+
+    private func animateCollapse(to target: CGFloat, animated: Bool) {
+        collapseAnimationTimer?.invalidate()
+        guard animated else {
+            collapseProgress = target
+            onCollapseChanged?()
+            needsDisplay = true
+            return
+        }
+
+        let start = collapseProgress
+        let duration: TimeInterval = 0.18
+        let startedAt = CACurrentMediaTime()
+        collapseAnimationTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] timer in
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+            let elapsed = CACurrentMediaTime() - startedAt
+            let t = min(1, CGFloat(elapsed / duration))
+            self.collapseProgress = start + (target - start) * t
+            self.onCollapseChanged?()
+            self.needsDisplay = true
+            if t >= 1 {
+                timer.invalidate()
+                self.collapseAnimationTimer = nil
+                self.collapseProgress = target
+                self.onCollapseChanged?()
+                self.needsDisplay = true
             }
         }
     }
@@ -175,17 +245,55 @@ final class PetView: NSView {
         }
     }
 
+    private func collapsedStatus() -> String {
+        let statuses = visibleCards.map { $0.cardStatus ?? "thinking" }
+        if statuses.contains("error") {
+            return "error"
+        }
+        if !statuses.isEmpty && statuses.allSatisfy({ $0 == "done" }) {
+            return "done"
+        }
+        return "thinking"
+    }
+
+    private func collapseHitRect(spriteRect: NSRect) -> NSRect {
+        if collapseProgress >= 0.5 {
+            return collapsedBadgeRect(spriteRect: spriteRect)
+        }
+        return chevronBadgeRect(spriteRect: spriteRect)
+    }
+
+    private func smoothstep(_ value: CGFloat) -> CGFloat {
+        let t = min(1, max(0, value))
+        return t * t * (3 - 2 * t)
+    }
+
+    private func withAlpha(_ alpha: CGFloat, draw: () -> Void) {
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current?.cgContext.setAlpha(min(1, max(0, alpha)))
+        draw()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private func chevronBadgeRect(spriteRect: NSRect) -> NSRect {
+        let size: CGFloat = 28
+        return NSRect(x: spriteRect.maxX - size + 1,
+                      y: spriteRect.minY + 1,
+                      width: size,
+                      height: size)
+    }
+
+    private func collapsedBadgeRect(spriteRect: NSRect) -> NSRect {
+        chevronBadgeRect(spriteRect: spriteRect)
+    }
+
     private func drawChevronBadge(spriteRect: NSRect) {
         let lightTheme = cardTheme == "light"
-        let size: CGFloat = 28
-        let rect = NSRect(x: spriteRect.maxX - size + 1,
-                          y: spriteRect.minY + 1,
-                          width: size,
-                          height: size)
+        let rect = chevronBadgeRect(spriteRect: spriteRect)
         if lightTheme {
-            NSColor(calibratedRed: 0.955, green: 0.940, blue: 0.905, alpha: 0.95).setFill()
+            NSColor(calibratedRed: 0.955, green: 0.940, blue: 0.905, alpha: 1.0).setFill()
         } else {
-            NSColor(calibratedWhite: 0.04, alpha: 0.94).setFill()
+            NSColor(calibratedWhite: 0.04, alpha: 1.0).setFill()
         }
         NSBezierPath(ovalIn: rect).fill()
         if lightTheme {
@@ -208,15 +316,50 @@ final class PetView: NSView {
         chevron.lineJoinStyle = .round
         chevron.stroke()
     }
+
+    private func drawCollapsedBadge(count: Int, status: String, spriteRect: NSRect) {
+        let rect = collapsedBadgeRect(spriteRect: spriteRect)
+        switch status {
+        case "done":
+            NSColor(calibratedRed: 0.12, green: 0.76, blue: 0.38, alpha: 1.0).setFill()
+        case "error":
+            NSColor(calibratedRed: 0.94, green: 0.22, blue: 0.22, alpha: 1.0).setFill()
+        default:
+            if cardTheme == "light" {
+                NSColor(calibratedRed: 0.955, green: 0.940, blue: 0.905, alpha: 1.0).setFill()
+            } else {
+                NSColor(calibratedWhite: 0.04, alpha: 1.0).setFill()
+            }
+        }
+        NSBezierPath(ovalIn: rect).fill()
+
+        let countAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+            .foregroundColor: status == "thinking" && cardTheme == "light"
+                ? NSColor(calibratedWhite: 0.28, alpha: 0.95)
+                : NSColor.white
+        ]
+        let label = "\(min(count, 99))" as NSString
+        let labelSize = label.size(withAttributes: countAttributes)
+        let labelRect = NSRect(x: rect.midX - labelSize.width / 2,
+                               y: rect.midY - labelSize.height / 2,
+                               width: labelSize.width,
+                               height: labelSize.height)
+        label.draw(in: labelRect, withAttributes: countAttributes)
+    }
 }
 
 final class PetWindow: NSPanel {
     var onUserDrag: (() -> Void)?
+    var onUserClick: ((NSPoint) -> Bool)?
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
     override func mouseDown(with event: NSEvent) {
+        if onUserClick?(event.locationInWindow) == true {
+            return
+        }
         onUserDrag?()
         performDrag(with: event)
     }
@@ -248,6 +391,13 @@ final class Renderer {
         window.onUserDrag = { [weak self] in
             self?.userMovedWindow = true
         }
+        window.onUserClick = { [weak self] point in
+            guard let view = self?.view else { return false }
+            return view.toggleCollapseIfHit(at: view.convert(point, from: nil))
+        }
+        view.onCollapseChanged = { [weak self] in
+            self?.resizeAndPosition(preserveSpriteAnchor: true)
+        }
     }
 
     func handle(_ command: Command) {
@@ -266,9 +416,12 @@ final class Renderer {
             view.cardTheme = command.cardTheme ?? "dark"
             view.showCard = command.showBubble ?? false
             view.cards = command.notifications ?? []
+            if !view.showCard || view.visibleCards.isEmpty {
+                view.setCollapsed(false, animated: false)
+            }
             view.scale = scale
             view.spinnerPhase = (view.spinnerPhase + 36).truncatingRemainder(dividingBy: 360)
-            resizeAndPosition()
+            resizeAndPosition(preserveSpriteAnchor: view.collapseProgress > 0)
             view.needsDisplay = true
             window.orderFrontRegardless()
         case "hide":
@@ -297,6 +450,10 @@ final class Renderer {
     }
 
     private func rendererSize() -> NSSize {
+        expandedRendererSize()
+    }
+
+    private func expandedRendererSize() -> NSSize {
         let width = cellWidth * scale
         let height = cellHeight * scale
         let cardCount = max(1, view.cards.isEmpty ? (view.showCard ? 1 : 0) : view.cards.count)
@@ -304,8 +461,16 @@ final class Renderer {
         return NSSize(width: max(width, cardWidth), height: height + cardsHeight - cardPetOverlap)
     }
 
-    private func resizeAndPosition() {
+    private func resizeAndPosition(preserveSpriteAnchor: Bool = false) {
         let size = rendererSize()
+        if preserveSpriteAnchor, let anchor = currentSpriteScreenAnchor() {
+            let newSpriteRect = view.spriteRect(forBoundsSize: size)
+            let origin = NSPoint(x: anchor.x - newSpriteRect.minX,
+                                 y: anchor.y - (size.height - newSpriteRect.minY))
+            window.setFrame(NSRect(origin: origin, size: size), display: true)
+            view.frame = NSRect(origin: .zero, size: size)
+            return
+        }
         if userMovedWindow {
             window.setFrame(NSRect(origin: window.frame.origin, size: size), display: true)
             view.frame = NSRect(origin: .zero, size: size)
@@ -334,6 +499,13 @@ final class Renderer {
         }
         window.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: true)
         view.frame = NSRect(origin: .zero, size: size)
+    }
+
+    private func currentSpriteScreenAnchor() -> NSPoint? {
+        guard !window.frame.isEmpty else { return nil }
+        let sprite = view.spriteRect
+        return NSPoint(x: window.frame.minX + sprite.minX,
+                       y: window.frame.maxY - sprite.minY)
     }
 }
 

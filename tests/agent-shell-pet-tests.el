@@ -230,6 +230,82 @@ non-Lisp resources this way."
                          '("sprout" "canarinho"))))
       (delete-directory root t))))
 
+(ert-deftest agent-shell-pet-test-read-pet-uses-completing-read ()
+  (let* ((root (make-temp-file "agent-shell-pet" t))
+         (agent-shell-pet-codex-home (expand-file-name "codex/" root))
+         (agent-shell-pet-user-pets-directory
+          (expand-file-name "agent-shell-pets/" root))
+         (agent-shell-pet-bundled-pets-directory
+          (expand-file-name "bundled-pets/" root))
+         (sprout-dir (expand-file-name "agent-shell-pets/sprout/" root))
+         (canarinho-dir (expand-file-name "pets/canarinho/" agent-shell-pet-codex-home))
+         (agent-shell-pet-id "sprout")
+         captured-default)
+    (unwind-protect
+        (progn
+          (dolist (pair `((,sprout-dir . ("sprout" . "Sprout"))
+                          (,canarinho-dir . ("canarinho" . "Canarinho"))))
+            (make-directory (car pair) t)
+            (agent-shell-pet-tests--write-webp-atlas
+             (expand-file-name "spritesheet.webp" (car pair)))
+            (with-temp-file (expand-file-name "pet.json" (car pair))
+              (insert "{\n"
+                      "  \"id\": \"" (cadr pair) "\",\n"
+                      "  \"displayName\": \"" (cddr pair) "\",\n"
+                      "  \"spritesheetPath\": \"spritesheet.webp\"\n"
+                      "}\n")))
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (_prompt collection _predicate _require-match
+                              _initial-input _hist default)
+                       (setq captured-default default)
+                       (should (= (length collection) 2))
+                       "Canarinho (canarinho)")))
+            (let ((pet (agent-shell-pet--read-pet)))
+              (should (equal (agent-shell-pet-id pet) "canarinho"))
+              (should (equal captured-default "Sprout (sprout)")))))
+      (delete-directory root t))))
+
+(ert-deftest agent-shell-pet-test-select-avatar-switches-active-runtime-in-place ()
+  (let* ((old-pet (agent-shell-pet--make
+                   :id "sprout"
+                   :display-name "Sprout"
+                   :directory "/tmp/sprout"
+                   :spritesheet-path "/tmp/sprout/spritesheet.webp"))
+         (new-pet (agent-shell-pet--make
+                   :id "canarinho"
+                   :display-name "Canarinho"
+                   :directory "/tmp/canarinho"
+                   :spritesheet-path "/tmp/canarinho/spritesheet.webp"))
+         (agent-shell-pet-scope 'buffer)
+         (agent-shell-pet--global-runtime nil)
+         (set-frame-calls 0)
+         (scheduled-calls 0)
+         (runtime nil))
+    (cl-letf (((symbol-function 'agent-shell-pet--ensure-frame-cache)
+               (lambda (&rest _) nil))
+              ((symbol-function 'agent-shell-pet--current-frame-path)
+               (lambda (&rest _) "/tmp/canarinho/idle-00.png"))
+              ((symbol-function 'agent-shell-pet--renderer-set-frame)
+               (lambda (&rest _) (cl-incf set-frame-calls)))
+              ((symbol-function 'agent-shell-pet--schedule-next-frame)
+               (lambda (&rest _) (cl-incf scheduled-calls))))
+      (with-temp-buffer
+        (setq runtime
+              (agent-shell-pet--make-runtime
+               :pet old-pet
+               :shell-buffer (current-buffer)
+               :renderer 'child-frame
+               :state 'idle
+               :status-text nil
+               :frame-index 3))
+        (setq-local agent-shell-pet--runtime runtime)
+        (agent-shell-pet-select-avatar new-pet)
+        (should (eq (agent-shell-pet--runtime-pet runtime) new-pet))
+        (should (= (agent-shell-pet--runtime-frame-index runtime) 0))
+        (should (equal agent-shell-pet-id "canarinho"))
+        (should (= set-frame-calls 1))
+        (should (= scheduled-calls 1))))))
+
 (ert-deftest agent-shell-pet-test-codex-pets-input-parsing ()
   (should (equal (agent-shell-pet--codex-pets-id-from-input "goku")
                  "goku"))

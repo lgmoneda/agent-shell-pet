@@ -408,6 +408,99 @@ non-Lisp resources this way."
 (ert-deftest agent-shell-pet-test-completion-duration-default ()
   (should (= agent-shell-pet-completion-display-seconds 20.0)))
 
+(ert-deftest agent-shell-pet-test-completion-sound-defaults-to-silent ()
+  (should-not agent-shell-pet-completion-sound-enabled)
+  (should (eq agent-shell-pet-completion-sound-function
+              #'agent-shell-pet--default-completion-sound)))
+
+(ert-deftest agent-shell-pet-test-default-completion-sound-uses-macos-afplay ()
+  (let (played)
+    (cl-letf (((symbol-function 'file-exists-p) (lambda (_file) t))
+              ((symbol-function 'executable-find)
+               (lambda (command) (and (equal command "afplay") command)))
+              ((symbol-function 'start-process)
+               (lambda (_name _buffer command file)
+                 (setq played (list command file)))))
+      (let ((system-type 'darwin))
+        (agent-shell-pet--default-completion-sound)
+        (should (equal played
+                       '("afplay" "/System/Library/Sounds/Glass.aiff")))))))
+
+(ert-deftest agent-shell-pet-test-default-completion-sound-falls-back-to-ding ()
+  (let (played)
+    (cl-letf (((symbol-function 'file-exists-p) (lambda (_file) nil))
+              ((symbol-function 'executable-find) (lambda (_command) nil))
+              ((symbol-function 'ding)
+               (lambda (&rest _args) (setq played t))))
+      (let ((system-type 'gnu/linux))
+        (agent-shell-pet--default-completion-sound)
+        (should played)))))
+
+(ert-deftest agent-shell-pet-test-turn-complete-plays-default-sound-when-enabled ()
+  (let (played)
+    (cl-letf (((symbol-function 'agent-shell-pet--set-state-then-collapse)
+               (lambda (&rest _args)))
+              ((symbol-function 'agent-shell-pet--default-completion-sound)
+               (lambda (&rest _args) (setq played t))))
+      (let ((agent-shell-pet-completion-sound-enabled t))
+        (agent-shell-pet--handle-event
+         (agent-shell-pet--make-runtime)
+         '((:event . turn-complete)
+           (:data . ((:stop-reason . "end_turn")))))
+        (should played)))))
+
+(ert-deftest agent-shell-pet-test-turn-complete-plays-custom-sound-function ()
+  (let (played)
+    (cl-letf (((symbol-function 'agent-shell-pet--set-state-then-collapse)
+               (lambda (&rest _args))))
+      (let ((agent-shell-pet-completion-sound-enabled t)
+            (agent-shell-pet-completion-sound-function
+             (lambda () (setq played t))))
+        (agent-shell-pet--handle-event
+         (agent-shell-pet--make-runtime)
+         '((:event . turn-complete)
+           (:data . ((:stop-reason . "end_turn")))))
+        (should played)))))
+
+(ert-deftest agent-shell-pet-test-turn-failure-does-not-play-completion-sound ()
+  (let (played)
+    (cl-letf (((symbol-function 'agent-shell-pet--set-state)
+               (lambda (&rest _args)))
+              ((symbol-function 'ding)
+               (lambda (&rest _args) (setq played t))))
+      (let ((agent-shell-pet-completion-sound-enabled t))
+        (agent-shell-pet--handle-event
+         (agent-shell-pet--make-runtime)
+         '((:event . turn-complete)
+           (:data . ((:stop-reason . "max_turns")))))
+        (should-not played)))))
+
+(ert-deftest agent-shell-pet-test-global-mode-enable-runs-enable-hook ()
+  (let (called
+        (agent-shell-pet--global-mode-enable-hook-ran nil))
+    (cl-letf (((symbol-function 'add-hook) (lambda (&rest _args)))
+              ((symbol-function 'derived-mode-p) (lambda (&rest _args) nil)))
+      (let ((agent-shell-pet-global-mode-enable-hook
+             (list (lambda () (setq called t)))))
+        (global-agent-shell-pet-mode 1)
+        (unwind-protect
+            (should called)
+          (global-agent-shell-pet-mode -1))))))
+
+(ert-deftest agent-shell-pet-test-global-mode-enable-hook-is-idempotent ()
+  (let ((calls 0)
+        (agent-shell-pet--global-mode-enable-hook-ran nil))
+    (cl-letf (((symbol-function 'add-hook) (lambda (&rest _args)))
+              ((symbol-function 'derived-mode-p) (lambda (&rest _args) nil)))
+      (let ((agent-shell-pet-global-mode-enable-hook
+             (list (lambda () (cl-incf calls)))))
+        (global-agent-shell-pet-mode 1)
+        (global-agent-shell-pet-mode 1)
+        (unwind-protect
+            (should (= calls 1))
+          (global-agent-shell-pet-mode -1)))
+      (should-not agent-shell-pet--global-mode-enable-hook-ran))))
+
 (ert-deftest agent-shell-pet-test-size-presets ()
   (let ((agent-shell-pet-scale 1.0))
     (let ((agent-shell-pet-size 'large))

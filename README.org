@@ -116,6 +116,20 @@ badge that remains available as a jump target until you visit the related
 (setq agent-shell-pet-completion-display-seconds 20.0)
 #+end_src
 
+Optionally play a sound when a turn completes successfully:
+
+#+begin_src emacs-lisp
+(setq agent-shell-pet-completion-sound-enabled t)
+#+end_src
+
+Customize the sound behavior with =agent-shell-pet-completion-sound-function=.
+On macOS, the default function first plays the standard =Glass.aiff= system
+sound with =afplay= before falling back to Emacs' built-in =ding=.
+
+When =global-agent-shell-pet-mode= is enabled, the package runs
+=agent-shell-pet-global-mode-enable-hook=.  Use it for personal integrations
+that should run when the global pet takes over agent-shell notifications.
+
 * Installing More Pets
 
 =agent-shell-pet= discovers pets from:

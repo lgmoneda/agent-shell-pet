@@ -247,6 +247,29 @@ is non-nil."
   :type 'number
   :group 'agent-shell-pet)
 
+(defcustom agent-shell-pet-completion-sound-enabled nil
+  "Non-nil to play a sound when a turn completes successfully."
+  :type 'boolean
+  :group 'agent-shell-pet)
+
+(defcustom agent-shell-pet-completion-sound-function
+  #'agent-shell-pet--default-completion-sound
+  "Function called to play the completion sound.
+
+The default plays the standard macOS Glass sound with afplay when available,
+then falls back to Emacs' built-in `ding'.  The function is called with no
+arguments."
+  :type 'function
+  :group 'agent-shell-pet)
+
+(defcustom agent-shell-pet-global-mode-enable-hook nil
+  "Hook run after `global-agent-shell-pet-mode' is enabled.
+
+Use this hook for personal integrations that should run when the global pet
+takes over agent-shell notifications."
+  :type 'hook
+  :group 'agent-shell-pet)
+
 (defcustom agent-shell-pet-speech-style 'pet
   "Style used for speech bubble text.
 
@@ -297,6 +320,9 @@ skipped so the pet stays hidden across all agent-shell buffers until
 
 (defvar global-agent-shell-pet-mode nil
   "Non-nil when `global-agent-shell-pet-mode' is enabled.")
+
+(defvar agent-shell-pet--global-mode-enable-hook-ran nil
+  "Non-nil after `agent-shell-pet-global-mode-enable-hook' runs for this enable.")
 
 (defvar agent-shell-pet--session-counter 0
   "Counter used to assign native renderer session ids.")
@@ -1388,6 +1414,29 @@ sources)."
                      #'agent-shell-pet--collapse-completion
                      runtime)))
 
+(defun agent-shell-pet--default-completion-sound ()
+  "Play the default completion sound."
+  (let ((macos-sound "/System/Library/Sounds/Glass.aiff"))
+    (cond
+     ((and (eq system-type 'darwin)
+           (file-exists-p macos-sound)
+           (executable-find "afplay"))
+      (start-process "agent-shell-pet-completion-sound"
+                     nil
+                     "afplay"
+                     macos-sound))
+     (t
+      (ding)))))
+
+(defun agent-shell-pet--play-completion-sound ()
+  "Play the configured completion sound, when enabled."
+  (when agent-shell-pet-completion-sound-enabled
+    (condition-case err
+        (funcall agent-shell-pet-completion-sound-function)
+      (error
+       (message "agent-shell-pet completion sound failed: %s"
+                (error-message-string err))))))
+
 (defun agent-shell-pet--tool-call-state (tool-call)
   "Return pet state for TOOL-CALL."
   (let ((status (alist-get :status tool-call))
@@ -1529,11 +1578,13 @@ sources)."
           (agent-shell-pet--tool-call-text tool-call))))
       ('turn-complete
        (if (agent-shell-pet--turn-success-p data)
-           (agent-shell-pet--set-state-then-collapse
-            runtime
-            'review
-            "Turn complete"
-            agent-shell-pet-completion-display-seconds)
+           (progn
+             (agent-shell-pet--play-completion-sound)
+             (agent-shell-pet--set-state-then-collapse
+              runtime
+              'review
+              "Turn complete"
+              agent-shell-pet-completion-display-seconds))
          (agent-shell-pet--set-state runtime 'failed
                                      "I hit a snag")))
       ('error
@@ -1725,14 +1776,18 @@ sources)."
         (dolist (buffer (buffer-list))
           (with-current-buffer buffer
             (when (derived-mode-p 'agent-shell-mode)
-              (agent-shell-pet--maybe-enable)))))
+              (agent-shell-pet--maybe-enable))))
+        (unless agent-shell-pet--global-mode-enable-hook-ran
+          (setq agent-shell-pet--global-mode-enable-hook-ran t)
+          (run-hooks 'agent-shell-pet-global-mode-enable-hook)))
     (remove-hook 'agent-shell-mode-hook #'agent-shell-pet--maybe-enable)
     (remove-hook 'buffer-list-update-hook
                  #'agent-shell-pet--maybe-clear-selected-buffer-card)
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer
         (when agent-shell-pet-mode
-          (agent-shell-pet-mode -1))))))
+          (agent-shell-pet-mode -1))))
+    (setq agent-shell-pet--global-mode-enable-hook-ran nil)))
 
 ;;;###autoload
 (defun agent-shell-pet-show ()

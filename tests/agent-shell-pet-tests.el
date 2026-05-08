@@ -840,6 +840,34 @@ non-Lisp resources this way."
       (when (buffer-live-p originating-buffer) (kill-buffer originating-buffer))
       (when (buffer-live-p other-buffer) (kill-buffer other-buffer)))))
 
+(ert-deftest agent-shell-pet-test-wave-from-any-buffer-uses-global-runtime ()
+  "`agent-shell-pet-wave' must wave the global pet regardless of caller buffer."
+  (let* ((agent-shell-pet-scope 'global)
+         (pet (agent-shell-pet--make :id "sprout"))
+         (originating-buffer (generate-new-buffer "Originating"))
+         (other-buffer (generate-new-buffer "Other"))
+         (global-runtime (agent-shell-pet--make-runtime
+                          :pet pet
+                          :shell-buffer originating-buffer
+                          :renderer 'child-frame
+                          :state 'idle
+                          :frame-index 0
+                          :global-display-p t
+                          :updated-at (current-time)))
+         (agent-shell-pet--global-runtime global-runtime)
+         set-transient-calls)
+    (unwind-protect
+        (cl-letf (((symbol-function 'agent-shell-pet--set-transient-state)
+                   (lambda (&rest args) (push args set-transient-calls)))
+                  ((symbol-function 'agent-shell-pet--runtime-live-p)
+                   (lambda (runtime) (eq runtime global-runtime))))
+          (with-current-buffer other-buffer
+            (agent-shell-pet-wave))
+          (should (equal set-transient-calls
+                         (list (list global-runtime 'waving 1.2)))))
+      (when (buffer-live-p originating-buffer) (kill-buffer originating-buffer))
+      (when (buffer-live-p other-buffer) (kill-buffer other-buffer)))))
+
 (ert-deftest agent-shell-pet-test-global-refresh-skipped-while-suppressed ()
   "Frame updates from registered runtimes must not re-show a hidden pet."
   (let* ((agent-shell-pet-scope 'global)

@@ -1804,9 +1804,12 @@ still be alive."
 (defun agent-shell-pet-wave ()
   "Ask the current pet to wave."
   (interactive)
-  (unless agent-shell-pet--runtime
-    (user-error "No pet runtime in this buffer"))
-  (agent-shell-pet--set-transient-state agent-shell-pet--runtime 'waving 1.2))
+  (let ((runtime (or agent-shell-pet--runtime
+                     (and (eq agent-shell-pet-scope 'global)
+                          agent-shell-pet--global-runtime))))
+    (unless (agent-shell-pet--runtime-live-p runtime)
+      (user-error "No pet runtime in this buffer"))
+    (agent-shell-pet--set-transient-state runtime 'waving 1.2)))
 
 (provide 'agent-shell-pet)
 

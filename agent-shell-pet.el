@@ -1703,7 +1703,9 @@ sources)."
   :group 'agent-shell-pet
   (if agent-shell-pet-mode
       (progn
-        (unless (derived-mode-p 'agent-shell-mode)
+        (unless (or (derived-mode-p 'agent-shell-mode)
+                    (derived-mode-p 'agent-shell-viewport-view-mode)
+                    (derived-mode-p 'agent-shell-viewport-edit-mode))
           (setq agent-shell-pet-mode nil)
           (user-error "agent-shell-pet-mode must be enabled in an agent-shell buffer"))
         ;; Idempotent enable.  `define-minor-mode' always re-runs the body

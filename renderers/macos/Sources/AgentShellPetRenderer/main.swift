@@ -557,7 +557,7 @@ final class Renderer {
             }
             view.scale = scale
             view.spinnerPhase = (view.spinnerPhase + 36).truncatingRemainder(dividingBy: 360)
-            resizeAndPosition(preserveSpriteAnchor: view.collapseProgress > 0)
+            resizeAndPosition(preserveSpriteAnchor: true)
             view.needsDisplay = true
             window.orderFrontRegardless()
         case "hide":
@@ -569,7 +569,7 @@ final class Renderer {
             view.showCard = false
             view.cards = []
             view.setCollapsed(false, animated: false)
-            resizeAndPosition()
+            resizeAndPosition(preserveSpriteAnchor: true)
             view.needsDisplay = true
         case "collapse":
             if view.showCard && !view.visibleCards.isEmpty {
@@ -599,7 +599,11 @@ final class Renderer {
     }
 
     private func rendererSize() -> NSSize {
-        expandedRendererSize()
+        if !view.showCard || view.visibleCards.isEmpty || view.collapseProgress >= 1 {
+            return NSSize(width: cellWidth * scale + petCardInset,
+                          height: cellHeight * scale)
+        }
+        return expandedRendererSize()
     }
 
     private func expandedRendererSize() -> NSSize {
